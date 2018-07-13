@@ -1,0 +1,9 @@
+Mode:wr
+Start address:40000
+End address:BFFFF
+Address increment:4
+Start data:40000
+Data increment:4
+Inverse:0
+Iteration:0
+Output:0

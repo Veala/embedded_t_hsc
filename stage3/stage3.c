@@ -24,8 +24,8 @@
 #define ERROR_TIME 1
 #define ERROR_CONNECTION 2
 #define ERROR_READ 3
-#define ERROR_SELECT 4
-#define ERROR_FD_ISSET 5
+#define ERROR_SELECT_CONN 4
+#define ERROR_FD_ISSET_CONN 5
 #define ERROR_OPENMEM 6
 #define ERROR_OPENLOG 7
 #define ERROR_MMAP 8
@@ -38,6 +38,8 @@
 #define ERROR_BIND 15
 #define ERROR_LISTEN 16
 #define ERROR_MUNMAP 17
+#define ERROR_SELECT_READ 18
+#define ERROR_FD_ISSET_READ 19
 
 //--- protocol errors ---
 #define ERROR_CMD 100
@@ -59,6 +61,7 @@ sockaddr_in my_addr, peer_addr;
 uint16_t port_server = 3307;
 uint16_t port_rw = 3308;
 uint16_t port_em = 3303;
+int n_conned;
 
 char cmdBuf[CMDSIZE]; int cmd;
 char dszBuf[DSZSIZE]; int dsz;
@@ -93,37 +96,55 @@ int handle_error(int err)
         return -1;
     } else if (err == ERROR_ATON) {
         sprintf(msg, "ERROR: inet_aton: %s\n", strerror(errsv));
-        writelog(msg); closeAll
+        writelog(msg); close(tcp_socket); closeAll
         return -1;
     } else if (err == ERROR_BIND) {
         sprintf(msg, "ERROR: bind: %s\n", strerror(errsv));
-        writelog(msg); closeAll
+        writelog(msg); close(tcp_socket); closeAll
         return -1;
     } else if (err == ERROR_LISTEN) {
         sprintf(msg, "ERROR: listen: %s\n", strerror(errsv));
-        writelog(msg); closeAll
+        writelog(msg); close(tcp_socket); closeAll
         return -1;
     } else if (err == ERROR_ACCEPT) {
         sprintf(msg, "ERROR: accept: %s\n", strerror(errsv));
-        writelog(msg); closeAll
+        writelog(msg); close(tcp_socket); closeAll
         return -1;
     } else if (err == ERROR_MUNMAP) {
         sprintf(msg, "ERROR: munmap(): %s\n", strerror(errsv));
         writelog(msg);
         return -1;
     } else if(err == ERROR_CONNECTION) {
-        perror("connection"); break;
+        sprintf(msg, "ERROR: read(): %s\n", strerror(errsv));
+        writelog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
     } else if (err == ERROR_READ) {
-        perror("read"); continue;
+        sprintf(msg, "ERROR: read(): %s\n", strerror(errsv));
+        writelog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
     } else if (err == ERROR_TIME) {
         FD_ZERO(&rfds);
         printf("No data within five seconds.\n");
         tv.tv_sec = 5; continue;
-    } else if (err == ERROR_SELECT) {
-        sprintf(msg, "ERROR: select: %s\n", strerror(errsv));
+    } else if (err == ERROR_SELECT_CONN) {
+        FD_ZERO(&rfds);
+        sprintf(msg, "ERROR: select conn: %s\n", strerror(errsv));
+        writelog(msg); close(tcp_socket); closeAll
+        return -1;
+    } else if (err == ERROR_SELECT_READ) {
+        sprintf(msg, "ERROR: select read: %s\n", strerror(errsv));
         writelog(msg);
         return -1;
-    } else if (err == ERROR_FD_ISSET) {
+    } else if (err == ERROR_FD_ISSET_CONN) {
+        FD_ZERO(&rfds);
+        sprintf(msg, "ERROR: FD_ISSET(no connection)\n");
+        writelog(msg);
+        return 0;
+    } else if (err == ERROR_FD_ISSET_READ) {
         sprintf(msg, "ERROR: FD_ISSET(no connection)\n");
         writelog(msg);
         return 0;
@@ -148,39 +169,8 @@ void logClose() {
     fclose(lf);
 }
 
-void checkCmd() {
-    if (!((cmd>=1) && (cmd<=5))) throw ERROR_CMD;
-}
-
-void readAllData(int& size, char (&refArray), timeval* tv) {
-    ssize_t r=0;
-    int n=0;
-    while (1) {
-        FD_ZERO(&rfds);
-        FD_SET(rw_socket, &rfds);
-        int retval = select(rw_socket+1, &rfds, NULL, NULL, tv);
-        if (retval) {
-            if (FD_ISSET(rw_socket,&rfds)) {
-                r = read(rw_socket, (&refArray)+n, size - n);
-                if (r == -1) throw ERROR_READ;
-                if (r ==  0) throw ERROR_CONNECTION;
-                #ifdef debug
-                printf("recv: %ld bytes\n", r);
-                #endif
-            } else {
-                throw ERROR_FD_ISSET;
-            }
-        } else if(retval == -1) {
-            throw ERROR_SELECT;
-        } else {
-            throw ERROR_TIME;
-        }
-        n+=r;
-        if (n>=size) return;
-    }
-}
-
 int connection() {
+    writelog("listening...");
     socklen_t peer_addr_size = sizeof(sockaddr_in);
     char txt[100];
     while (1) {
@@ -198,23 +188,61 @@ int connection() {
                 sprintf(txt,"Connection on port %d is available now", ntohs(peer_addr.sin_port));
                 writelog(txt);
             } else {
-                FD_ZERO(&rfds);
-                if (handle_error(ERROR_FD_ISSET) == -1)
+                if (handle_error(ERROR_FD_ISSET_CONN) == -1)
                     exit(EXIT_FAILURE);
             }
         } else if (retval == -1) {
-            FD_ZERO(&rfds);
-            if (handle_error(ERROR_SELECT) == -1)
+            if (handle_error(ERROR_SELECT_CONN) == -1)
                 exit(EXIT_FAILURE);
         }
     }
 }
 
+void checkCmd() {
+    if (!((cmd>=1) && (cmd<=5))) throw ERROR_CMD;
+}
 
+int readAllData(int& size, char (&refArray), timeval* tv) {
+    ssize_t r=0;
+    int n=0;
+    while (1) {
+        FD_ZERO(&rfds);
+        FD_SET(rw_socket, &rfds);
+        int retval = select(rw_socket+1, &rfds, NULL, NULL, tv);
+        if (retval) {
+            if (FD_ISSET(rw_socket,&rfds)) {
+                r = read(rw_socket, (&refArray)+n, size - n);
+                if (r == -1)
+                    if (handle_error(ERROR_READ) == -1) {
+
+                    }
+                if (r ==  0)
+                    if (handle_error(ERROR_CONNECTION) == -1)
+                        exit(EXIT_FAILURE);
+                #ifdef debug
+                printf("recv: %ld bytes\n", r);
+                #endif
+            } else {
+                if (handle_error(ERROR_FD_ISSET_READ) == -1)
+                    exit(EXIT_FAILURE);
+            }
+        } else if(retval == -1) {
+            throw ERROR_SELECT_READ;
+        } else {
+            throw ERROR_TIME;
+        }
+        n+=r;
+        if (n>=size) return;
+    }
+}
+
+int working() {
+
+}
 
 int main(int argc, char* argv[])
 {
-    lf = fopen("log.txt", "w");
+    lf = fopen("log.txt", "a");
     if (lf == NULL) {
         if (handle_error(ERROR_OPENLOG) == -1)
             exit(EXIT_FAILURE);
@@ -278,8 +306,6 @@ int main(int argc, char* argv[])
         if (handle_error(ERROR_LISTEN) == -1)
             exit(EXIT_FAILURE);
     }
-
-    writelog("listening...");
 
     connection();
 

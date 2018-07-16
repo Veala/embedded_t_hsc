@@ -17,8 +17,9 @@
 
 //#define debug
 
-#define CMDSIZE 2
-#define DSZSIZE 2
+#define MAXNUMCONN 1   //max number connections
+#define CMDSIZE 2    //command size in bytes
+#define DSZSIZE 2     //data size in bytes
 
 //--- system errors ---
 #define ERROR_TIME 1
@@ -35,14 +36,14 @@
 #define ERROR_BIND 12
 #define ERROR_LISTEN 13
 #define ERROR_ACCEPT 14
-#define ERROR_BIND 15
-#define ERROR_LISTEN 16
-#define ERROR_MUNMAP 17
-#define ERROR_SELECT_READ 18
-#define ERROR_FD_ISSET_READ 19
+#define ERROR_MUNMAP 15
+#define ERROR_SELECT_READ 16
+#define ERROR_FD_ISSET_READ 17
+#define ERROR_CLOSE_SOCK 18
 
 //--- protocol errors ---
 #define ERROR_CMD 100
+#define ERROR_DSZ 101
 
 FILE* lf;
 int fd;
@@ -57,106 +58,31 @@ size_t n;
 int tcp_socket, rw_socket, em_socket;
 fd_set rfds;
 struct timeval tv;
-sockaddr_in my_addr, peer_addr;
+struct sockaddr_in my_addr, peer_addr;
 uint16_t port_server = 3307;
 uint16_t port_rw = 3308;
 uint16_t port_em = 3303;
-int n_conned;
+int n_conned;     //current connections count
 
-char cmdBuf[CMDSIZE]; int cmd;
-char dszBuf[DSZSIZE]; int dsz;
+char cmdBuf[CMDSIZE];
+char dszBuf[DSZSIZE];
+int cmd, dsz;
+//int CMDSIZE = 2;    //command size in bytes
+//int DSZSIZE = 2;     //data size in bytes
 
-#define closeAll if(munmap(virtual_base, length+delta) == -1) \
-                    handle_error(ERROR_MUNMAP); \
-                close(fd); logClose(); \
+#define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
+                        handle_error(ERROR_MUNMAP); \
+                    close(fd); closeLog(); \
 
-int handle_error(int err)
-{
-    char msg[1000];
-    int errsv = errno;
-    if (err == ERROR_OPENMEM) {
-        sprintf(msg, "ERROR: could not open \"/dev/mem\"...: %s\n", strerror(errsv));
-        writelog(msg); logClose();
-        return -1;
-    } else if (err == ERROR_OPENLOG) {
-        printf("WARNING: could not open log.txt ...\n");
-        return 0;
-    } else if (err == ERROR_MMAP) {
-        sprintf(msg, "ERROR: mmap() failed...: %s\n", strerror(errsv));
-        writelog(msg);
-        close(fd); logClose();
-        return -1;
-    } else if (err == ERROR_ARG) {
-        sprintf(msg, "ERROR: <dotted-address-server> program argument is empty\n");
-        writelog(msg); closeAll
-        return -1;
-    } else if (err == ERROR_OPENSOCK) {
-        sprintf(msg, "ERROR: tcp_socket: %s\n", strerror(errsv));
-        writelog(msg); closeAll
-        return -1;
-    } else if (err == ERROR_ATON) {
-        sprintf(msg, "ERROR: inet_aton: %s\n", strerror(errsv));
-        writelog(msg); close(tcp_socket); closeAll
-        return -1;
-    } else if (err == ERROR_BIND) {
-        sprintf(msg, "ERROR: bind: %s\n", strerror(errsv));
-        writelog(msg); close(tcp_socket); closeAll
-        return -1;
-    } else if (err == ERROR_LISTEN) {
-        sprintf(msg, "ERROR: listen: %s\n", strerror(errsv));
-        writelog(msg); close(tcp_socket); closeAll
-        return -1;
-    } else if (err == ERROR_ACCEPT) {
-        sprintf(msg, "ERROR: accept: %s\n", strerror(errsv));
-        writelog(msg); close(tcp_socket); closeAll
-        return -1;
-    } else if (err == ERROR_MUNMAP) {
-        sprintf(msg, "ERROR: munmap(): %s\n", strerror(errsv));
-        writelog(msg);
-        return -1;
-    } else if(err == ERROR_CONNECTION) {
-        sprintf(msg, "ERROR: read(): %s\n", strerror(errsv));
-        writelog(msg);
-        close(rw_socket);
-        n_conned = n_conned-1;
-        return 0;
-    } else if (err == ERROR_READ) {
-        sprintf(msg, "ERROR: read(): %s\n", strerror(errsv));
-        writelog(msg);
-        close(rw_socket);
-        n_conned = n_conned-1;
-        return 0;
-    } else if (err == ERROR_TIME) {
-        FD_ZERO(&rfds);
-        printf("No data within five seconds.\n");
-        tv.tv_sec = 5; continue;
-    } else if (err == ERROR_SELECT_CONN) {
-        FD_ZERO(&rfds);
-        sprintf(msg, "ERROR: select conn: %s\n", strerror(errsv));
-        writelog(msg); close(tcp_socket); closeAll
-        return -1;
-    } else if (err == ERROR_SELECT_READ) {
-        sprintf(msg, "ERROR: select read: %s\n", strerror(errsv));
-        writelog(msg);
-        return -1;
-    } else if (err == ERROR_FD_ISSET_CONN) {
-        FD_ZERO(&rfds);
-        sprintf(msg, "ERROR: FD_ISSET(no connection)\n");
-        writelog(msg);
-        return 0;
-    } else if (err == ERROR_FD_ISSET_READ) {
-        sprintf(msg, "ERROR: FD_ISSET(no connection)\n");
-        writelog(msg);
-        return 0;
-    } else if (err == ERROR_CMD) {
-        printf("ERROR: unknown command code\n");
-        continue;
-    }
-}
+#define closeAll_2  if(close(tcp_socket) == -1) \
+                        handle_error(ERROR_CLOSE_SOCK); \
+                    if(munmap(virtual_base, length+delta) == -1) \
+                        handle_error(ERROR_MUNMAP); \
+                    close(fd); closeLog(); \
 
-void writelog(char *msg) {
+void writeLog(char *msg) {
     time_t curTime = time(NULL);
-    tm* ltm = localtime(&curTime);
+    struct tm* ltm = localtime(&curTime);
     if (lf==NULL) {
         printf("%d.%d.%d %d:%d %s", ltm->tm_mday, ltm->tm_mon, ltm->tm_year, ltm->tm_hour, ltm->tm_min, msg);
     } else {
@@ -164,45 +90,140 @@ void writelog(char *msg) {
     }
 }
 
-void logClose() {
+void closeLog() {
     if (lf==NULL) return;
     fclose(lf);
 }
 
-int connection() {
-    writelog("listening...");
-    socklen_t peer_addr_size = sizeof(sockaddr_in);
-    char txt[100];
-    while (1) {
+int handle_error(int err)
+{
+    char msg[1000];
+    int errsv = errno;
+    if (err == ERROR_OPENMEM) {
+        sprintf(msg, "ERROR: could not open \"/dev/mem\"...: %s\n", strerror(errsv));
+        writeLog(msg); closeLog();
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_OPENLOG) {
+        printf("WARNING: could not open log.txt ...\n");
+        return 0;
+    } else if (err == ERROR_MMAP) {
+        sprintf(msg, "ERROR: mmap() failed...: %s\n", strerror(errsv));
+        writeLog(msg);
+        close(fd); closeLog();
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_ARG) {
+        sprintf(msg, "ERROR: <dotted-address-server> program argument is empty\n");
+        writeLog(msg); closeAll_1
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_OPENSOCK) {
+        sprintf(msg, "ERROR: tcp_socket failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_1
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_ATON) {
+        sprintf(msg, "ERROR: inet_aton() failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_BIND) {
+        sprintf(msg, "ERROR: bind() failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_LISTEN) {
+        sprintf(msg, "ERROR: listen() failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_ACCEPT) {
+        sprintf(msg, "ERROR: accept() failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_MUNMAP) {
+        sprintf(msg, "ERROR: munmap() failed...: %s\n", strerror(errsv));
+        writeLog(msg);
+        return 0;
+    } else if (err == ERROR_CLOSE_SOCK) {
+        sprintf(msg, "ERROR: close(sock) failed...: %s\n", strerror(errsv));
+        writeLog(msg);
+        return 0;
+    } else if(err == ERROR_CONNECTION) {
+        sprintf(msg, "ERROR: read() failed(==0)...: %s\n", strerror(errsv));
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
+    } else if (err == ERROR_READ) {
+        sprintf(msg, "ERROR: read() failed(==-1)...: %s\n", strerror(errsv));
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
+    } else if (err == ERROR_TIME) {
         FD_ZERO(&rfds);
-        FD_SET(tcp_socket, &rfds);
-        int retval = select(tcp_socket+1, &rfds, NULL, NULL, NULL);
-        if (retval) {
-            if (FD_ISSET(tcp_socket,&rfds)) {
-                int temp_socket = accept(tcp_socket, (sockaddr*) &peer_addr, &peer_addr_size);
-                if (temp_socket == -1)
-                    if (handle_error(ERROR_ACCEPT) == -1)
-                        exit(EXIT_FAILURE);
-                if (ntohs(peer_addr.sin_port) == port_rw) rw_socket = temp_socket;
-                else if (ntohs(peer_addr.sin_port) == port_em) em_socket = temp_socket;
-                sprintf(txt,"Connection on port %d is available now", ntohs(peer_addr.sin_port));
-                writelog(txt);
-            } else {
-                if (handle_error(ERROR_FD_ISSET_CONN) == -1)
-                    exit(EXIT_FAILURE);
-            }
-        } else if (retval == -1) {
-            if (handle_error(ERROR_SELECT_CONN) == -1)
-                exit(EXIT_FAILURE);
-        }
+        sprintf(msg, "WARNING: No data within five seconds.\n");
+        writeLog(msg);
+        tv.tv_sec = 5;
+        return 0;
+    } else if (err == ERROR_SELECT_CONN) {
+        FD_ZERO(&rfds);
+        sprintf(msg, "ERROR: select() connection failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_SELECT_READ) {
+        sprintf(msg, "ERROR: select() read failed...: %s\n", strerror(errsv));
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
+    } else if (err == ERROR_FD_ISSET_CONN) {
+        FD_ZERO(&rfds);
+        sprintf(msg, "ERROR: FD_ISSET connection failed...\n");
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_FD_ISSET_READ) {
+        sprintf(msg, "ERROR: FD_ISSET read failed...\n");
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
+    } else if (err == ERROR_CMD) {
+        sprintf(msg, "ERROR: unknown command code\n");
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return -1;
+    } else if (err == ERROR_DSZ) {
+        sprintf(msg, "ERROR: data size no multiple 4\n");
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return -1;
     }
 }
 
-void checkCmd() {
-    if (!((cmd>=1) && (cmd<=5))) throw ERROR_CMD;
+int connection() {
+    writeLog("listening...");
+    socklen_t peer_addr_size = sizeof(struct sockaddr_in);
+    char txt[100];
+    FD_ZERO(&rfds);
+    FD_SET(tcp_socket, &rfds);
+    int retval = select(tcp_socket+1, &rfds, NULL, NULL, NULL);
+    if (retval) {
+        if (FD_ISSET(tcp_socket,&rfds)) {
+            int temp_socket = accept(tcp_socket, (struct sockaddr*) &peer_addr, &peer_addr_size);
+            if (temp_socket == -1)  handle_error(ERROR_ACCEPT);
+            if (ntohs(peer_addr.sin_port) == port_rw) rw_socket = temp_socket;
+            else if (ntohs(peer_addr.sin_port) == port_em) em_socket = temp_socket;
+            sprintf(txt,"Connection on port %d is available now\n", ntohs(peer_addr.sin_port));
+            writeLog(txt);
+            n_conned=n_conned+1;
+            return 0;
+        } else {
+            handle_error(ERROR_FD_ISSET_CONN);
+        }
+    } else if (retval == -1) {
+        handle_error(ERROR_SELECT_CONN);
+    }
 }
 
-int readAllData(int& size, char (&refArray), timeval* tv) {
+int readAllData(int size, char* refArray, struct timeval* tv) {
     ssize_t r=0;
     int n=0;
     while (1) {
@@ -211,59 +232,91 @@ int readAllData(int& size, char (&refArray), timeval* tv) {
         int retval = select(rw_socket+1, &rfds, NULL, NULL, tv);
         if (retval) {
             if (FD_ISSET(rw_socket,&rfds)) {
-                r = read(rw_socket, (&refArray)+n, size - n);
-                if (r == -1)
-                    if (handle_error(ERROR_READ) == -1) {
-
-                    }
-                if (r ==  0)
-                    if (handle_error(ERROR_CONNECTION) == -1)
-                        exit(EXIT_FAILURE);
+                r = read(rw_socket, refArray+n, size - n);
+                if (r == -1) {
+                    handle_error(ERROR_READ);
+                    return -1;
+                }
+                if (r ==  0) {
+                    handle_error(ERROR_CONNECTION);
+                    return -1;
+                }
                 #ifdef debug
                 printf("recv: %ld bytes\n", r);
                 #endif
             } else {
-                if (handle_error(ERROR_FD_ISSET_READ) == -1)
-                    exit(EXIT_FAILURE);
+                handle_error(ERROR_FD_ISSET_READ);
+                return -1;
             }
         } else if(retval == -1) {
-            throw ERROR_SELECT_READ;
+            handle_error(ERROR_SELECT_READ);
+            return -1;
         } else {
-            throw ERROR_TIME;
+            handle_error(ERROR_TIME);
+            return -1;
         }
         n+=r;
-        if (n>=size) return;
+        if (n>=size) return 0;
+    }
+}
+
+int checkCmd() {
+    if (!((cmd>=1) && (cmd<=5))) {
+        handle_error(ERROR_CMD);
+        return -1;
+    }
+}
+
+int checkDsz() {
+    int remainder = dsz % 4;
+    if (remainder != 0) {
+        handle_error(ERROR_DSZ);
+        return -1;
     }
 }
 
 int working() {
+    tv.tv_sec = 5;tv.tv_usec = 0;
 
+    //----- read cmd ------
+    if (readAllData(CMDSIZE, cmdBuf, NULL) == -1) return -1;
+    cmd = atoi(cmdBuf);
+    if (checkCmd() == -1) return -1;
+
+    //----- read dsz ------
+    if (readAllData(DSZSIZE, dszBuf, &tv) == -1) return -1;
+    dsz = atoi(dszBuf);
+    if (checkDsz() == -1) return -1;
+
+    //----- pars cmd ------
+    if (cmd == 1) {
+
+    } else if (cmd == 2) {
+
+    } else if (cmd == 3) {
+
+    } else if (cmd == 4) {
+
+    } else if (cmd == 5) {
+
+    }
 }
 
 int main(int argc, char* argv[])
 {
     lf = fopen("log.txt", "a");
-    if (lf == NULL) {
-        if (handle_error(ERROR_OPENLOG) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if (lf == NULL) handle_error(ERROR_OPENLOG);
 
     //------------------------------------------------------------ Virtual memory setting ---------------------------------------------------------
     fd = open("/dev/mem", (O_RDWR | O_SYNC));
-    if (fd == -1) {
-        if (handle_error(ERROR_OPENMEM) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if (fd == -1)   handle_error(ERROR_OPENMEM);
 
     long ps = sysconf(_SC_PAGESIZE);
     pa_offset = offset & ~(ps-1);
     delta = offset - pa_offset;
 
     virtual_base = mmap(NULL, length + delta, (PROT_READ | PROT_WRITE), MAP_SHARED, fd, pa_offset);
-    if(virtual_base == MAP_FAILED) {
-        if (handle_error(ERROR_MMAP) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if(virtual_base == MAP_FAILED)  handle_error(ERROR_MMAP);
 
     n = sizeof(unsigned int);
 
@@ -276,66 +329,35 @@ int main(int argc, char* argv[])
     printf("size int, bytes: %u\n\n", n);
 #endif
 
-    //------------------------------------------------------------ Connection setting ---------------------------------------------------------
-    if (argc != 2) {
-        if (handle_error(ERROR_ARG) == -1)
-            exit(EXIT_FAILURE);
-    }
+    //------------------------------------------------------------ Socket setting ---------------------------------------------------------
+    if (argc != 2)  handle_error(ERROR_ARG);
 
     tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (tcp_socket == -1) {
-        if (handle_error(ERROR_OPENSOCK) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if (tcp_socket == -1)   handle_error(ERROR_OPENSOCK);
 
     my_addr.sin_family = AF_INET;
     my_addr.sin_port = htons(3307);
 
-    if (inet_aton(argv[1], &my_addr.sin_addr) == 0) {
-        if (handle_error(ERROR_ATON) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if (inet_aton(argv[1], &my_addr.sin_addr) == 0) handle_error(ERROR_ATON);
 
-    if (bind(tcp_socket, (sockaddr *) &my_addr, sizeof(sockaddr_in)) == -1) {
-        if (handle_error(ERROR_BIND) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if (bind(tcp_socket, (struct sockaddr *) &my_addr, sizeof(struct sockaddr_in)) == -1) handle_error(ERROR_BIND);
 
-    if (listen(tcp_socket, 2) == -1) {
-        if (handle_error(ERROR_LISTEN) == -1)
-            exit(EXIT_FAILURE);
-    }
+    if (listen(tcp_socket, MAXNUMCONN) == -1)    handle_error(ERROR_LISTEN);
 
-    connection();
-
-    //------------------------------------------------------------ Working ---------------------------------------------------------
-    tv.tv_sec = 5;
-    tv.tv_usec = 0;
+    //------------------------------------------------------------ Main cycle ---------------------------------------------------------
 
     while (1) {
-        int cmdsize = CMDSIZE;
-        int dszsize = DSZSIZE;
-        readAllData(cmdsize, cmdBuf[0], NULL);
-        cmd = atoi(cmdBuf);
-        checkCmd();
-        readAllData(dszsize, dszBuf[0], &tv);
-        dsz = atoi(dszBuf);
-
-        switch (cmd) {
-        case 1:
-
-            break;
-        case 2:
-
-            break;
-        default:
-            break;
+        if (n_conned < MAXNUMCONN) {
+            connection();
+        } else {
+            working();
         }
     }
 
-    if (close(tcp_socket) == -1)
-        handle_error("close tcp socket");
+    if (close(rw_socket) == -1)
+        handle_error(ERROR_CLOSE_SOCK);
+    closeAll_2
 
     return 0;
 }

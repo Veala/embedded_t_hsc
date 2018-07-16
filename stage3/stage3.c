@@ -17,9 +17,12 @@
 
 //#define debug
 
-#define MAXNUMCONN 1   //max number connections
-#define CMDSIZE 2    //command size in bytes
-#define DSZSIZE 2     //data size in bytes
+#define MAXNUMCONN 1    //max number connections
+#define CMDSIZE 2       //command size in bytes
+#define DSZSIZE 2       //data count in bytes
+#define ADDRSIZE 4      //address size in bytes
+#define DATASIZE 4      //data size in bytes
+#define ECHOSIZE 1000   //echo max size in bytes
 
 //--- system errors ---
 #define ERROR_TIME 1
@@ -66,9 +69,8 @@ int n_conned;     //current connections count
 
 char cmdBuf[CMDSIZE];
 char dszBuf[DSZSIZE];
-int cmd, dsz;
-//int CMDSIZE = 2;    //command size in bytes
-//int DSZSIZE = 2;     //data size in bytes
+int cmd, dsz, addr;
+char echoBuf[ECHOSIZE];
 
 #define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
                         handle_error(ERROR_MUNMAP); \
@@ -265,6 +267,7 @@ int checkCmd() {
         handle_error(ERROR_CMD);
         return -1;
     }
+    return 0;
 }
 
 int checkDsz() {
@@ -273,6 +276,7 @@ int checkDsz() {
         handle_error(ERROR_DSZ);
         return -1;
     }
+    return 0;
 }
 
 int working() {
@@ -290,15 +294,28 @@ int working() {
 
     //----- pars cmd ------
     if (cmd == 1) {
-
+        int N = dsz/4;
+        for (int i=0; i<N; i++) {
+            if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+            if (readAllData(DATASIZE, virtual_base + addr + delta, &tv) == -1) return -1;
+        }
     } else if (cmd == 2) {
-
+        if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+        if (readAllData(dsz-4, virtual_base + addr + delta, &tv) == -1) return -1;
     } else if (cmd == 3) {
-
+        int N = dsz/4;
+        for (int i=0; i<N; i++) {
+            if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+            write(rw_socket, virtual_base + addr + delta, DATASIZE);
+        }
     } else if (cmd == 4) {
-
+        int count;
+        if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+        if (readAllData(DATASIZE, (char*)&count, &tv) == -1) return -1;
+        write(rw_socket, virtual_base + addr + delta, count);
     } else if (cmd == 5) {
-
+        if (readAllData(dsz, echoBuf, &tv) == -1) return -1;
+        printf("Echo: %s\n", echoBuf);
     }
 }
 

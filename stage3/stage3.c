@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -49,6 +50,7 @@
 #define ERROR_DSZ 101
 
 FILE* lf;
+char *lt = "l";
 int fd;
 
 void *virtual_base;
@@ -74,25 +76,28 @@ char echoBuf[ECHOSIZE];
 
 #define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
                         handle_error(ERROR_MUNMAP); \
-                    close(fd); closeLog(); \
+                    close(fd);\
 
 #define closeAll_2  if(close(tcp_socket) == -1) \
                         handle_error(ERROR_CLOSE_SOCK); \
                     if(munmap(virtual_base, length+delta) == -1) \
                         handle_error(ERROR_MUNMAP); \
-                    close(fd); closeLog(); \
+                    close(fd); \
 
 void writeLog(char *msg) {
+    if (strcmp(lt, "t") == 0) {
+        lf = NULL;
+    } else {
+        lf = fopen("stage3.log", "a");
+        if (lf == NULL) printf("WARNING: could not open log.txt ...\n");
+    }
     time_t curTime = time(NULL);
     struct tm* ltm = localtime(&curTime);
     if (lf==NULL) {
-        printf("%d.%d.%d %d:%d %s", ltm->tm_mday, ltm->tm_mon, ltm->tm_year, ltm->tm_hour, ltm->tm_min, msg);
+        printf("%d.%d.%d %d:%d:%d %s", ltm->tm_mday, ltm->tm_mon, ltm->tm_year, ltm->tm_hour, ltm->tm_min, ltm->tm_sec, msg);
     } else {
-        fprintf(lf, "%d.%d.%d %d:%d %s", ltm->tm_mday, ltm->tm_mon, ltm->tm_year, ltm->tm_hour, ltm->tm_min, msg);
+        fprintf(lf, "%d.%d.%d %d:%d:%d %s", ltm->tm_mday, ltm->tm_mon, ltm->tm_year, ltm->tm_hour, ltm->tm_min, ltm->tm_sec, msg);
     }
-}
-
-void closeLog() {
     if (lf==NULL) return;
     fclose(lf);
 }
@@ -103,7 +108,7 @@ int handle_error(int err)
     int errsv = errno;
     if (err == ERROR_OPENMEM) {
         sprintf(msg, "ERROR: could not open \"/dev/mem\"...: %s\n", strerror(errsv));
-        writeLog(msg); closeLog();
+        writeLog(msg);
         exit(EXIT_FAILURE);
     } else if (err == ERROR_OPENLOG) {
         printf("WARNING: could not open log.txt ...\n");
@@ -111,7 +116,7 @@ int handle_error(int err)
     } else if (err == ERROR_MMAP) {
         sprintf(msg, "ERROR: mmap() failed...: %s\n", strerror(errsv));
         writeLog(msg);
-        close(fd); closeLog();
+        close(fd);
         exit(EXIT_FAILURE);
     } else if (err == ERROR_ARG) {
         sprintf(msg, "ERROR: <dotted-address-server> program argument is empty\n");
@@ -201,9 +206,10 @@ int handle_error(int err)
 }
 
 int connection() {
-    writeLog("listening...");
+    writeLog("listening...\n");
     socklen_t peer_addr_size = sizeof(struct sockaddr_in);
     char txt[100];
+
     FD_ZERO(&rfds);
     FD_SET(tcp_socket, &rfds);
     int retval = select(tcp_socket+1, &rfds, NULL, NULL, NULL);
@@ -211,8 +217,12 @@ int connection() {
         if (FD_ISSET(tcp_socket,&rfds)) {
             int temp_socket = accept(tcp_socket, (struct sockaddr*) &peer_addr, &peer_addr_size);
             if (temp_socket == -1)  handle_error(ERROR_ACCEPT);
-            if (ntohs(peer_addr.sin_port) == port_rw) rw_socket = temp_socket;
-            else if (ntohs(peer_addr.sin_port) == port_em) em_socket = temp_socket;
+#ifdef debug
+            printf("Peer port: %d\n", ntohs(peer_addr.sin_port));
+#endif
+//            if (ntohs(peer_addr.sin_port) == port_rw) rw_socket = temp_socket;
+//            else if (ntohs(peer_addr.sin_port) == port_em) em_socket = temp_socket;
+            rw_socket = temp_socket;
             sprintf(txt,"Connection on port %d is available now\n", ntohs(peer_addr.sin_port));
             writeLog(txt);
             n_conned=n_conned+1;
@@ -243,9 +253,9 @@ int readAllData(int size, char* refArray, struct timeval* tv) {
                     handle_error(ERROR_CONNECTION);
                     return -1;
                 }
-                #ifdef debug
+#ifdef debug
                 printf("recv: %ld bytes\n", r);
-                #endif
+#endif
             } else {
                 handle_error(ERROR_FD_ISSET_READ);
                 return -1;
@@ -284,13 +294,14 @@ int working() {
 
     //----- read cmd ------
     if (readAllData(CMDSIZE, cmdBuf, NULL) == -1) return -1;
-    cmd = atoi(cmdBuf);
+    strcpy((char*)&cmd, cmdBuf);
     if (checkCmd() == -1) return -1;
 
     //----- read dsz ------
     if (readAllData(DSZSIZE, dszBuf, &tv) == -1) return -1;
-    dsz = atoi(dszBuf);
-    if (checkDsz() == -1) return -1;
+    strcpy((char*)&dsz, dszBuf);
+    if (cmd >= 1 && cmd <=4 )
+        if (checkDsz() == -1) return -1;
 
     //----- pars cmd ------
     if (cmd == 1) {
@@ -315,46 +326,45 @@ int working() {
         write(rw_socket, virtual_base + addr + delta, count);
     } else if (cmd == 5) {
         if (readAllData(dsz, echoBuf, &tv) == -1) return -1;
-        printf("Echo: %s\n", echoBuf);
+        printf("%s\n", echoBuf);
     }
 }
 
 int main(int argc, char* argv[])
 {
-    lf = fopen("log.txt", "a");
-    if (lf == NULL) handle_error(ERROR_OPENLOG);
+    //------------------------------------------------------------ Output setting ---------------------------------------------------------
+    if (argc < 2) handle_error(ERROR_ARG);
+    if ((argc > 2) && (strcmp(argv[2], "t") == 0)) lt = "t";
 
-    //------------------------------------------------------------ Virtual memory setting ---------------------------------------------------------
-    fd = open("/dev/mem", (O_RDWR | O_SYNC));
-    if (fd == -1)   handle_error(ERROR_OPENMEM);
+//    //------------------------------------------------------------ Virtual memory setting ---------------------------------------------------------
+//    fd = open("/dev/mem", (O_RDWR | O_SYNC));
+//    if (fd == -1)   handle_error(ERROR_OPENMEM);
 
-    long ps = sysconf(_SC_PAGESIZE);
-    pa_offset = offset & ~(ps-1);
-    delta = offset - pa_offset;
+//    long ps = sysconf(_SC_PAGESIZE);
+//    pa_offset = offset & ~(ps-1);
+//    delta = offset - pa_offset;
 
-    virtual_base = mmap(NULL, length + delta, (PROT_READ | PROT_WRITE), MAP_SHARED, fd, pa_offset);
-    if(virtual_base == MAP_FAILED)  handle_error(ERROR_MMAP);
+//    virtual_base = mmap(NULL, length + delta, (PROT_READ | PROT_WRITE), MAP_SHARED, fd, pa_offset);
+//    if(virtual_base == MAP_FAILED)  handle_error(ERROR_MMAP);
 
-    n = sizeof(unsigned int);
+//    n = sizeof(unsigned int);
 
-#ifdef debug
-    printf("\"/dev/mem\"  size: %ld\n", sb.st_size);
-    printf("page size: %ld\n", ps);
-    printf("offset: %#x\n", offset);
-    printf("pa_offset: %#x\n", pa_offset);
-    printf("delta: %#x\n", delta);
-    printf("size int, bytes: %u\n\n", n);
-#endif
+//#ifdef debug
+//    printf("\"/dev/mem\"  size: %ld\n", sb.st_size);
+//    printf("page size: %ld\n", ps);
+//    printf("offset: %#x\n", offset);
+//    printf("pa_offset: %#x\n", pa_offset);
+//    printf("delta: %#x\n", delta);
+//    printf("size int, bytes: %u\n\n", n);
+//#endif
 
     //------------------------------------------------------------ Socket setting ---------------------------------------------------------
-    if (argc != 2)  handle_error(ERROR_ARG);
-
     tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
 
     if (tcp_socket == -1)   handle_error(ERROR_OPENSOCK);
 
     my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(3307);
+    my_addr.sin_port = htons(port_server);
 
     if (inet_aton(argv[1], &my_addr.sin_addr) == 0) handle_error(ERROR_ATON);
 

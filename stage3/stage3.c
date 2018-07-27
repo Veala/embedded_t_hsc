@@ -19,8 +19,8 @@
 //#define debug
 
 #define MAXNUMCONN 1    //max number connections
-#define CMDSIZE 2       //command size in bytes
-#define DSZSIZE 2       //data count in bytes
+#define CMDSIZE 4       //command size in bytes
+#define DSZSIZE 4       //data count in bytes
 #define ADDRSIZE 4      //address size in bytes
 #define DATASIZE 4      //data size in bytes
 #define ECHOSIZE 1000   //echo max size in bytes
@@ -69,9 +69,7 @@ uint16_t port_rw = 3308;
 uint16_t port_em = 3303;
 int n_conned;     //current connections count
 
-char cmdBuf[CMDSIZE];
-char dszBuf[DSZSIZE];
-int cmd, dsz, addr;
+int cmd, dsz, addr, data;
 char echoBuf[ECHOSIZE];
 
 #define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
@@ -291,33 +289,40 @@ int checkDsz() {
 
 int working() {
     tv.tv_sec = 5;tv.tv_usec = 0;
+    char msg[1000];
 
     //----- read cmd ------
-    if (readAllData(CMDSIZE, cmdBuf, NULL) == -1) return -1;
-    strcpy((char*)&cmd, cmdBuf);
+    if (readAllData(CMDSIZE, (char*)&cmd, NULL) == -1) return -1;
+    sprintf(msg, "Cmd: %d\n",cmd);  writeLog(msg);
     if (checkCmd() == -1) return -1;
 
     //----- read dsz ------
-    if (readAllData(DSZSIZE, dszBuf, &tv) == -1) return -1;
-    strcpy((char*)&dsz, dszBuf);
+    if (readAllData(DSZSIZE, (char*)&dsz, &tv) == -1) return -1;
+    sprintf(msg, "Dsz: %ld\n",dsz); writeLog(msg);
     if (cmd >= 1 && cmd <=4 )
         if (checkDsz() == -1) return -1;
 
     //----- pars cmd ------
     if (cmd == 1) {
-        int N = dsz/4;
+        int N = dsz/(DATASIZE+ADDRSIZE);
         for (int i=0; i<N; i++) {
             if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
-            if (readAllData(DATASIZE, virtual_base + addr + delta, &tv) == -1) return -1;
+            if (readAllData(DATASIZE, (char*)&data, &tv) == -1) return -1;
+            memcpy(virtual_base + addr + delta, (void*)&data, n);
         }
     } else if (cmd == 2) {
         if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
-        if (readAllData(dsz-4, virtual_base + addr + delta, &tv) == -1) return -1;
+        int N = (dsz-ADDRSIZE)/DATASIZE;
+        for (int i=0; i<N; i++) {
+            if (readAllData(DATASIZE, (char*)&data, &tv) == -1) return -1;
+            memcpy(virtual_base + addr + i*ADDRSIZE + delta, (void*)&data, n);
+        }
     } else if (cmd == 3) {
         int N = dsz/4;
         for (int i=0; i<N; i++) {
             if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
-            write(rw_socket, virtual_base + addr + delta, DATASIZE);
+            memcpy((void*)&data, virtual_base + addr + delta, n);
+            write(rw_socket, (void*)&data, DATASIZE);
         }
     } else if (cmd == 4) {
         int count;
@@ -328,6 +333,8 @@ int working() {
         if (readAllData(dsz, echoBuf, &tv) == -1) return -1;
         printf("%s\n", echoBuf);
     }
+    sprintf(msg, "Cmd %d is completed\n", cmd);
+    writeLog(msg);
 }
 
 int main(int argc, char* argv[])
@@ -336,27 +343,27 @@ int main(int argc, char* argv[])
     if (argc < 2) handle_error(ERROR_ARG);
     if ((argc > 2) && (strcmp(argv[2], "t") == 0)) lt = "t";
 
-//    //------------------------------------------------------------ Virtual memory setting ---------------------------------------------------------
-//    fd = open("/dev/mem", (O_RDWR | O_SYNC));
-//    if (fd == -1)   handle_error(ERROR_OPENMEM);
+    //------------------------------------------------------------ Virtual memory setting ---------------------------------------------------------
+    fd = open("/dev/mem", (O_RDWR | O_SYNC));
+    if (fd == -1)   handle_error(ERROR_OPENMEM);
 
-//    long ps = sysconf(_SC_PAGESIZE);
-//    pa_offset = offset & ~(ps-1);
-//    delta = offset - pa_offset;
+    long ps = sysconf(_SC_PAGESIZE);
+    pa_offset = offset & ~(ps-1);
+    delta = offset - pa_offset;
 
-//    virtual_base = mmap(NULL, length + delta, (PROT_READ | PROT_WRITE), MAP_SHARED, fd, pa_offset);
-//    if(virtual_base == MAP_FAILED)  handle_error(ERROR_MMAP);
+    virtual_base = mmap(NULL, length + delta, (PROT_READ | PROT_WRITE), MAP_SHARED, fd, pa_offset);
+    if(virtual_base == MAP_FAILED)  handle_error(ERROR_MMAP);
 
-//    n = sizeof(unsigned int);
+    n = sizeof(unsigned int);
 
-//#ifdef debug
-//    printf("\"/dev/mem\"  size: %ld\n", sb.st_size);
-//    printf("page size: %ld\n", ps);
-//    printf("offset: %#x\n", offset);
-//    printf("pa_offset: %#x\n", pa_offset);
-//    printf("delta: %#x\n", delta);
-//    printf("size int, bytes: %u\n\n", n);
-//#endif
+#ifdef debug
+    //printf("\"/dev/mem\"  size: %ld\n", sb.st_size);
+    printf("page size: %ld\n", ps);
+    printf("offset: %#x\n", offset);
+    printf("pa_offset: %#x\n", pa_offset);
+    printf("delta: %#x\n", delta);
+    printf("size int, bytes: %u\n\n", n);
+#endif
 
     //------------------------------------------------------------ Socket setting ---------------------------------------------------------
     tcp_socket = socket(AF_INET, SOCK_STREAM, 0);

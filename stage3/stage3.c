@@ -322,7 +322,7 @@ int working() {
         for (int i=0; i<N; i++) {
             if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
             memcpy((void*)&data, virtual_base + addr + delta, n);
-            //printf("Read: %d\n", data);
+            printf("Read: %d\n", data);
             write(rw_socket, (void*)&data, DATASIZE);
         }
     } else if (cmd == 4) {

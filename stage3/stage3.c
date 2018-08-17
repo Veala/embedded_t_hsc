@@ -16,7 +16,7 @@
 #include <errno.h>
 //#include <rpc/auth_des.h>
 
-//#define debug
+#define debug
 
 #define MAXNUMCONN 1    //max number connections
 #define CMDSIZE 4       //command size in bytes
@@ -44,6 +44,7 @@
 #define ERROR_SELECT_READ 16
 #define ERROR_FD_ISSET_READ 17
 #define ERROR_CLOSE_SOCK 18
+#define ERROR_WRITE 19
 
 //--- protocol errors ---
 #define ERROR_CMD 100
@@ -160,6 +161,12 @@ int handle_error(int err)
         close(rw_socket);
         n_conned = n_conned-1;
         return 0;
+    } else if (err == ERROR_WRITE) {
+        sprintf(msg, "ERROR: write() failed(==-1)...: %s\n", strerror(errsv));
+        writeLog(msg);
+        close(rw_socket);
+        n_conned = n_conned-1;
+        return 0;
     } else if (err == ERROR_TIME) {
         FD_ZERO(&rfds);
         sprintf(msg, "WARNING: No data within five seconds.\n");
@@ -270,6 +277,29 @@ int readAllData(int size, char* refArray, struct timeval* tv) {
     }
 }
 
+int writeAllData(int size, char* refArray) {
+    ssize_t r=0;
+    int n=0;
+    while (1) {
+        r = write(rw_socket, refArray+n, size - n);
+        if (r == -1) {
+            handle_error(ERROR_WRITE);
+            return -1;
+        }
+        if (r ==  0) {
+            handle_error(ERROR_CONNECTION);
+            return -1;
+        }
+#ifdef debug
+        printf("send: %ld bytes\n", r);
+#endif
+        n+=r;
+        printf("r: %d\n", r);
+        printf("n: %d\n", n);
+        if (n>=size) return 0;
+    }
+}
+
 int checkCmd() {
     if (!((cmd>=1) && (cmd<=5))) {
         handle_error(ERROR_CMD);
@@ -302,29 +332,59 @@ int working() {
     if (cmd >= 1 && cmd <=4 )
         if (checkDsz() == -1) return -1;
 
+    char* readArray = (char*)malloc((size_t)dsz);
+    if (readArray == NULL) exit(1);
+    if (readAllData(dsz, readArray, &tv) == -1) return -1;
+
     //----- pars cmd ------
     if (cmd == 1) {
         int N = dsz/(DATASIZE+ADDRSIZE);
         for (int i=0; i<N; i++) {
-            if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
-            if (readAllData(DATASIZE, (char*)&data, &tv) == -1) return -1;
+            addr = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i);    data = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i+n);
             memcpy(virtual_base + addr + delta, (void*)&data, n);
         }
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+
+//        int N = dsz/(DATASIZE+ADDRSIZE);
+//        for (int i=0; i<N; i++) {
+//            if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+//            if (readAllData(DATASIZE, (char*)&data, &tv) == -1) return -1;
+//            memcpy(virtual_base + addr + delta, (void*)&data, n);
+//        }
+//        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 2) {
-        if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+        addr = *(int*)(readArray);
         int N = (dsz-ADDRSIZE)/DATASIZE;
         for (int i=0; i<N; i++) {
-            if (readAllData(DATASIZE, (char*)&data, &tv) == -1) return -1;
+            data = *(int*)(readArray+DATASIZE*(i+1));
             memcpy(virtual_base + addr + i*ADDRSIZE + delta, (void*)&data, n);
         }
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+
+//        if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
+//        int N = (dsz-ADDRSIZE)/DATASIZE;
+//        for (int i=0; i<N; i++) {
+//            if (readAllData(DATASIZE, (char*)&data, &tv) == -1) return -1;
+//            memcpy(virtual_base + addr + i*ADDRSIZE + delta, (void*)&data, n);
+//        }
     } else if (cmd == 3) {
         int N = dsz/4;
+        printf("cmd 3, dsz: %d\n", dsz);
+
+        char* writeArray = (char*)malloc((size_t)dsz);
+        if (writeArray == NULL) exit(1);
+        printf("cmd 3, after malloc\n", dsz);
+
         for (int i=0; i<N; i++) {
-            if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
-            memcpy((void*)&data, virtual_base + addr + delta, n);
-            printf("Read: %d\n", data);
-            write(rw_socket, (void*)&data, DATASIZE);
+            addr = *(int*)(readArray+ADDRSIZE*i);
+            memcpy((void*)(writeArray+DATASIZE*i), virtual_base + addr + delta, n);
+            //printf("Read: %d\n", *(int*)(writeArray+DATASIZE*i));
         }
+        printf("cmd 3, after for()\n");
+        if (writeAllData(dsz, writeArray)) return -1;
+        printf("cmd 3, after writeAllData\n");
+
+        free(writeArray);
     } else if (cmd == 4) {
         int count;
         if (readAllData(ADDRSIZE, (char*)&addr, &tv) == -1) return -1;
@@ -334,6 +394,7 @@ int working() {
         if (readAllData(dsz, echoBuf, &tv) == -1) return -1;
         printf("%s\n", echoBuf);
     }
+    free(readArray);
     sprintf(msg, "Cmd %d is completed\n", cmd);
     writeLog(msg);
 }

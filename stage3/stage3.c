@@ -24,6 +24,13 @@
 #define ADDRSIZE 4      //address size in bytes
 #define DATASIZE 4      //data size in bytes
 #define ECHOSIZE 1000   //echo max size in bytes
+#define TYPEMANSIZE 4   //man_type
+
+#define QPSK  0b00
+#define QAM16 0b01
+#define QAM64 0b10
+#define ADDR_MEM2P_DELTA    0x200  //128words*4b=d512b=h200
+#define ADDR_REG_HSC_CFG    0x90
 
 //--- system errors ---
 #define ERROR_TIME 1
@@ -75,6 +82,39 @@ int n_conned;     //current connections count
 int cmd, dsz, addr, data;
 char echoBuf[ECHOSIZE];
 char *readArray = NULL, *writeArray = NULL;
+
+struct CommandWord
+{
+    unsigned int cmd_code : 7;
+    unsigned int t_r : 1;
+    unsigned int num_of_symbols : 8;
+    unsigned int rtaddr : 5;
+
+}cmdWord;
+
+struct REG_HSC_cfg
+{
+    unsigned int type_man : 2;
+    unsigned int ena_codec : 1;
+    unsigned int ena_aru : 1;
+    unsigned int ena_mem_vsk : 1;
+    unsigned int : 1;
+    unsigned int rtavsk_ena : 1;
+    unsigned int rtavsk : 5;
+    unsigned int rt_bc : 1;
+    unsigned int en_rt_bc_int : 1;
+}reg_hsc_cfg;
+
+int symbolLength()
+{
+    memcpy((void*)&reg_hsc_cfg, virtual_base + ADDR_REG_HSC_CFG + delta, n);
+    if (reg_hsc_cfg.ena_codec == 0 && reg_hsc_cfg.type_man == QPSK)    return 112; //28*4=112
+    if (reg_hsc_cfg.ena_codec == 0 && reg_hsc_cfg.type_man == QAM16)   return 224; //56*4=224
+    if (reg_hsc_cfg.ena_codec == 0 && reg_hsc_cfg.type_man == QAM64)   return 336; //84*4=336
+    if (reg_hsc_cfg.ena_codec == 1 && reg_hsc_cfg.type_man == QPSK)    return 96;  //24*4=96
+    if (reg_hsc_cfg.ena_codec == 1 && reg_hsc_cfg.type_man == QAM16)   return 176; //44*4=176
+    if (reg_hsc_cfg.ena_codec == 1 && reg_hsc_cfg.type_man == QAM64)   return 224; //56*4=224
+}
 
 #define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
                         handle_error(ERROR_MUNMAP); \
@@ -421,6 +461,17 @@ int working() {
         writeArray = NULL;
     } else if (cmd == 5) {
         printf("%s\n", readArray);
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+    } else if (cmd == 6) {  //writing path to the 2-port mem
+        addr = *(int*)(readArray);
+        *(unsigned int*)&cmdWord = *((int*)(readArray)+1);
+        int SL = symbolLength();
+        int Nsp = cmdWord.num_of_symbols;
+        int lastSL = SL - (Nsp*SL - (dsz - n)); //without nulls
+        void* curArrayPointer = readArray+n;
+        for (int i=1; i<Nsp; i++, addr+=ADDR_MEM2P_DELTA, curArrayPointer+=SL)
+            memcpy(virtual_base + addr + delta, curArrayPointer, SL);
+        memcpy(virtual_base + addr + delta, curArrayPointer, lastSL);
         if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     }
     free(readArray);

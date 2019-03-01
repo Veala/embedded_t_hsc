@@ -1,9 +1,12 @@
+//#define _GNU_SOURCE
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <time.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -312,6 +315,7 @@ int connection() {
 }
 
 int readAllData(int size, char* refArray, struct timeval* tv) {
+    //printf("readAllData start\n");
     ssize_t r=0;
     int n=0;
     while (1) {
@@ -344,12 +348,17 @@ int readAllData(int size, char* refArray, struct timeval* tv) {
             return -1;
         }
         n+=r;
-        if (n>=size) return 0;
+        if (n>=size) {
+            printf("//----- readAllData end\n");
+            return 0;
+        }
     }
 }
 
 int writeAllData(int size, char* refArray) {
+    printf("//----- writeAllData start\n");
     ssize_t r=0;
+    printf("size: %d\n", size);
     int n=0;
     while (1) {
         r = write(rw_socket, refArray+n, size - n);
@@ -367,12 +376,15 @@ int writeAllData(int size, char* refArray) {
         n+=r;
         printf("r: %d\n", r);
         printf("n: %d\n", n);
-        if (n>=size) return 0;
+        if (n>=size) {
+            printf("//----- writeAllData end\n");
+            return 0;
+        }
     }
 }
 
 int checkCmd() {
-    if (!((cmd>=1) && (cmd<=5))) {
+    if (!((cmd>=1) && (cmd<=7))) {
         handle_error(ERROR_CMD);
         return -1;
     }
@@ -391,16 +403,32 @@ int checkMult(int num, int who) {
     return 0;
 }
 
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void* start_bulb_thread(void* arg) {
+    void *bulb_ptr = virtual_base + 0x194 + delta;
+    int indicator = 0;
+    while (1) {
+        usleep(400000);
+        pthread_mutex_lock(&mutex);
+        if (indicator==1) indicator=0; else indicator=1;
+        *(int*)bulb_ptr=indicator;
+        pthread_mutex_unlock(&mutex);
+    }
+}
+
 int working() {
     tv.tv_sec = 5;tv.tv_usec = 0;
     char msg[1000];
 
     //----- read cmd ------
+    printf("//----- read cmd ------\n");
     if (readAllData(CMDSIZE, (char*)&cmd, NULL) == -1) return -1;
     sprintf(msg, "Cmd: %d\n",cmd);  writeLog(msg);
     if (checkCmd() == -1) return -1;
 
     //----- read dsz ------
+    printf("//----- read dsz ------\n");
     if (readAllData(DSZSIZE, (char*)&dsz, &tv) == -1) return -1;
     sprintf(msg, "Dsz: %ld\n",dsz); writeLog(msg);
     if (cmd >= 1 && cmd <=4 )
@@ -410,6 +438,7 @@ int working() {
     if (readArray == NULL)
         return handle_error(ERROR_MALLOC);
 
+    printf("//----- read array ------\n");
     if (readAllData(dsz, readArray, &tv) == -1) return -1;
 
     //----- pars cmd ------
@@ -434,6 +463,7 @@ int working() {
         if (writeArray == NULL)
             return handle_error(ERROR_MALLOC);
 
+        pthread_mutex_lock(&mutex);
         for (int i=0; i<N; i++) {
             addr = *(int*)(readArray+ADDRSIZE*i);
             memcpy((void*)(writeArray+DATASIZE*i), virtual_base + addr + delta, n);
@@ -441,6 +471,7 @@ int working() {
             printf("Read: %d\n", *(int*)(writeArray+DATASIZE*i));
 #endif
         }
+        pthread_mutex_unlock(&mutex);
         if (writeAllData(dsz, writeArray)) return -1;
 
         free(writeArray);
@@ -448,13 +479,17 @@ int working() {
     } else if (cmd == 4) {
         addr = *(int*)(readArray);   int count = *(int*)(readArray+DATASIZE);
         if (checkMult(count, 1) == -1) return -1;
+        printf("cmd == 4, addr==%d\n", addr);
+        printf("cmd == 4, count==%d\n", count);
 
         writeArray = (char*)malloc((size_t)count);
         if (writeArray == NULL)
             return handle_error(ERROR_MALLOC);
 
+        pthread_mutex_lock(&mutex);
         for (int i=0; i<count; i+=DATASIZE, addr+=DATASIZE)
             memcpy((void*)(writeArray+i), virtual_base + addr + delta, n);
+        pthread_mutex_unlock(&mutex);
         if (writeAllData(count, writeArray)) return -1;
 
         free(writeArray);
@@ -473,6 +508,32 @@ int working() {
             memcpy(virtual_base + addr + delta, curArrayPointer, SL);
         memcpy(virtual_base + addr + delta, curArrayPointer, lastSL);
         if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+    } else if (cmd == 7) {
+        addr = *(int*)(readArray);
+        printf("addr: %d\n", addr);
+        size_t count = (size_t)*(int*)(readArray+DATASIZE);
+        printf("count: %ld\n", count);
+        int destAddr = *(int*)(readArray+2*DATASIZE);
+        printf("destAddr: %d\n", destAddr);
+        if (checkMult(count, 1) == -1) return -1;
+
+//        writeArray = (char*)malloc((size_t)count);
+//        for (int i=0; i<count; i+=DATASIZE, addr+=DATASIZE)
+//            memcpy((void*)(writeArray+i), virtual_base + addr + delta, n);
+//        for (int i=0; i<count; i+=DATASIZE, destAddr+=DATASIZE)
+//            memcpy(virtual_base + destAddr + delta, (void*)(writeArray + i), n);
+
+        pthread_mutex_lock(&mutex);
+        for (int i=0; i<count; i+=DATASIZE, addr+=DATASIZE)
+            memcpy(virtual_base + destAddr + i + delta, virtual_base + addr + delta, n);
+        pthread_mutex_unlock(&mutex);
+
+//            memcpy(virtual_base + destAddr + delta, virtual_base + addr + delta, count); //not working
+
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+    } else {
+        printf("ELSE");
+        return 1;
     }
     free(readArray);
     readArray = NULL;
@@ -488,6 +549,7 @@ int main(int argc, char* argv[])
 
     //------------------------------------------------------------ Virtual memory setting ---------------------------------------------------------
     fd = open("/dev/mem", (O_RDWR | O_SYNC));
+
     if (fd == -1)   handle_error(ERROR_OPENMEM);
 
     long ps = sysconf(_SC_PAGESIZE);
@@ -521,6 +583,14 @@ int main(int argc, char* argv[])
     if (bind(tcp_socket, (struct sockaddr *) &my_addr, sizeof(struct sockaddr_in)) == -1) handle_error(ERROR_BIND);
 
     if (listen(tcp_socket, MAXNUMCONN) == -1)    handle_error(ERROR_LISTEN);
+
+    //------------------------------------------------------------ LED thread ---------------------------------------------------------
+    //pthread_t* thread = (pthread_t*)malloc(sizeof(pthread_t));
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, &start_bulb_thread, NULL) != 0)
+        printf("Bulb thread didn't start!\n");
+    else
+        printf("Bulb thread started!\n");
 
     //------------------------------------------------------------ Main cycle ---------------------------------------------------------
 

@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
 //#include <rpc/auth_des.h>
 
 //#define debug
@@ -57,6 +58,9 @@
 #define ERROR_WRITE 19
 #define ERROR_MALLOC 20
 #define ERROR_MULTIPLE 21
+#define ERROR_SIGNAL 22
+#define ERROR_THREAD_CLOSE 23
+#define ERROR_SETSOCKOPT 24
 
 //--- protocol errors ---
 #define ERROR_CMD 100
@@ -85,6 +89,8 @@ int n_conned;     //current connections count
 int cmd, dsz, addr, data;
 char echoBuf[ECHOSIZE];
 char *readArray = NULL, *writeArray = NULL;
+
+pthread_t thread;
 
 struct CommandWord
 {
@@ -281,6 +287,18 @@ int handle_error(int err)
         if (writeArray != NULL) { free(writeArray); writeArray = NULL; }
         n_conned = n_conned-1;
         return -1;
+    } else if (err == ERROR_SIGNAL) {
+        sprintf(msg, "WARNING: Stop signal is not working\n");
+        writeLog(msg);
+        return 0;
+    } else if (err == ERROR_THREAD_CLOSE) {
+        sprintf(msg, "ERROR: Thread close function is not working\n");
+        writeLog(msg);
+        return 0;
+    } else if (err == ERROR_SETSOCKOPT) {
+        sprintf(msg, "ERROR: SETSOCKOPT failed: %s\n", strerror(errsv));
+        writeLog(msg);
+        return 0;
     }
 }
 
@@ -415,6 +433,22 @@ void* start_bulb_thread(void* arg) {
         *(int*)bulb_ptr=indicator;
         pthread_mutex_unlock(&mutex);
     }
+}
+
+void de1_stop_signal(int s, siginfo_t *i, void *c) {
+    char msg[1000];
+    sprintf(msg, "Signal %d is obtained\n", s);
+    writeLog(msg);
+    if (pthread_cancel(thread) == -1) handle_error(ERROR_THREAD_CLOSE);
+//    int optval = 1; socklen_t len = sizeof(optval);
+//    setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, (void*)&optval, len);
+    if(close(tcp_socket) == -1) handle_error(ERROR_CLOSE_SOCK);
+    if(close(rw_socket) == -1) handle_error(ERROR_CLOSE_SOCK);
+    if(munmap(virtual_base, length+delta) == -1) handle_error(ERROR_MUNMAP);
+    close(fd);
+    if (readArray != NULL)  { free(readArray); readArray = NULL; }
+    if (writeArray != NULL) { free(writeArray); writeArray = NULL; }
+    kill(getpid(), SIGKILL);
 }
 
 int working() {
@@ -586,14 +620,19 @@ int main(int argc, char* argv[])
 
     //------------------------------------------------------------ LED thread ---------------------------------------------------------
     //pthread_t* thread = (pthread_t*)malloc(sizeof(pthread_t));
-    pthread_t thread;
     if (pthread_create(&thread, NULL, &start_bulb_thread, NULL) != 0)
         printf("Bulb thread didn't start!\n");
     else
         printf("Bulb thread started!\n");
 
-    //------------------------------------------------------------ Main cycle ---------------------------------------------------------
+    //------------------------------------------------------------ Signal interruption ------------------------------------------------
+    struct sigaction de1_stop_action;
+    de1_stop_action.sa_flags = SA_SIGINFO;
+    de1_stop_action.sa_sigaction = de1_stop_signal;
+    if (sigaction(40, &de1_stop_action, NULL) == -1) handle_error(ERROR_SIGNAL);
+    else printf("For correct close the programm send signal 40 to the process.\n");
 
+    //------------------------------------------------------------ Main cycle ---------------------------------------------------------
     while (1) {
         if (n_conned < MAXNUMCONN) {
             connection();

@@ -90,40 +90,7 @@ int cmd, dsz, addr, data;
 char echoBuf[ECHOSIZE];
 char *readArray = NULL, *writeArray = NULL;
 
-pthread_t thread;
-
-struct CommandWord
-{
-    unsigned int cmd_code : 7;
-    unsigned int t_r : 1;
-    unsigned int num_of_symbols : 8;
-    unsigned int rtaddr : 5;
-
-}cmdWord;
-
-struct REG_HSC_cfg
-{
-    unsigned int type_man : 2;
-    unsigned int ena_codec : 1;
-    unsigned int ena_aru : 1;
-    unsigned int ena_mem_vsk : 1;
-    unsigned int : 1;
-    unsigned int rtavsk_ena : 1;
-    unsigned int rtavsk : 5;
-    unsigned int rt_bc : 1;
-    unsigned int en_rt_bc_int : 1;
-}reg_hsc_cfg;
-
-int symbolLength()
-{
-    memcpy((void*)&reg_hsc_cfg, virtual_base + ADDR_REG_HSC_CFG + delta, n);
-    if (reg_hsc_cfg.ena_codec == 0 && reg_hsc_cfg.type_man == QPSK)    return 112; //28*4=112
-    if (reg_hsc_cfg.ena_codec == 0 && reg_hsc_cfg.type_man == QAM16)   return 224; //56*4=224
-    if (reg_hsc_cfg.ena_codec == 0 && reg_hsc_cfg.type_man == QAM64)   return 336; //84*4=336
-    if (reg_hsc_cfg.ena_codec == 1 && reg_hsc_cfg.type_man == QPSK)    return 96;  //24*4=96
-    if (reg_hsc_cfg.ena_codec == 1 && reg_hsc_cfg.type_man == QAM16)   return 176; //44*4=176
-    if (reg_hsc_cfg.ena_codec == 1 && reg_hsc_cfg.type_man == QAM64)   return 224; //56*4=224
-}
+pthread_t thread_bulb;
 
 #define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
                         handle_error(ERROR_MUNMAP); \
@@ -439,7 +406,7 @@ void de1_stop_signal(int s, siginfo_t *i, void *c) {
     char msg[1000];
     sprintf(msg, "Signal %d is obtained\n", s);
     writeLog(msg);
-    if (pthread_cancel(thread) == -1) handle_error(ERROR_THREAD_CLOSE);
+    if (pthread_cancel(thread_bulb) == -1) handle_error(ERROR_THREAD_CLOSE);
 //    int optval = 1; socklen_t len = sizeof(optval);
 //    setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, (void*)&optval, len);
     if(close(tcp_socket) == -1) handle_error(ERROR_CLOSE_SOCK);
@@ -482,7 +449,7 @@ int working() {
             addr = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i);    data = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i+n);
             memcpy(virtual_base + addr + delta, (void*)&data, n);
         }
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;  //для ускорения закомментировано!!!
     } else if (cmd == 2) {
         addr = *(int*)(readArray);
         int N = (dsz-ADDRSIZE)/DATASIZE;
@@ -490,7 +457,7 @@ int working() {
             data = *(int*)(readArray+DATASIZE*(i+1));
             memcpy(virtual_base + addr + i*ADDRSIZE + delta, (void*)&data, n);
         }
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;  //для ускорения закомментировано!!!
     } else if (cmd == 3) {
         int N = dsz/4;
         writeArray = (char*)malloc((size_t)dsz);
@@ -530,18 +497,18 @@ int working() {
         writeArray = NULL;
     } else if (cmd == 5) {
         printf("%s\n", readArray);
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;  //для ускорения закомментировано!!!
     } else if (cmd == 6) {  //writing path to the 2-port mem
-        addr = *(int*)(readArray);
-        *(unsigned int*)&cmdWord = *((int*)(readArray)+1);
-        int SL = symbolLength();
-        int Nsp = cmdWord.num_of_symbols;
-        int lastSL = SL - (Nsp*SL - (dsz - n)); //without nulls
-        void* curArrayPointer = readArray+n;
-        for (int i=1; i<Nsp; i++, addr+=ADDR_MEM2P_DELTA, curArrayPointer+=SL)
-            memcpy(virtual_base + addr + delta, curArrayPointer, SL);
-        memcpy(virtual_base + addr + delta, curArrayPointer, lastSL);
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+//        addr = *(int*)(readArray);
+//        *(unsigned int*)&cmdWord = *((int*)(readArray)+1);
+//        int SL = symbolLength();
+//        int Nsp = cmdWord.num_of_symbols;
+//        int lastSL = SL - (Nsp*SL - (dsz - n)); //without nulls
+//        void* curArrayPointer = readArray+n;
+//        for (int i=1; i<Nsp; i++, addr+=ADDR_MEM2P_DELTA, curArrayPointer+=SL)
+//            memcpy(virtual_base + addr + delta, curArrayPointer, SL);
+//        memcpy(virtual_base + addr + delta, curArrayPointer, lastSL);
+//        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 7) {
         addr = *(int*)(readArray);
         printf("addr: %d\n", addr);
@@ -564,7 +531,7 @@ int working() {
 
 //            memcpy(virtual_base + destAddr + delta, virtual_base + addr + delta, count); //not working
 
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;    //для ускорения закомментировано!!!
     } else {
         printf("ELSE");
         return 1;
@@ -620,7 +587,7 @@ int main(int argc, char* argv[])
 
     //------------------------------------------------------------ LED thread ---------------------------------------------------------
     //pthread_t* thread = (pthread_t*)malloc(sizeof(pthread_t));
-    if (pthread_create(&thread, NULL, &start_bulb_thread, NULL) != 0)
+    if (pthread_create(&thread_bulb, NULL, &start_bulb_thread, NULL) != 0)
         printf("Bulb thread didn't start!\n");
     else
         printf("Bulb thread started!\n");

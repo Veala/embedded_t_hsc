@@ -84,7 +84,7 @@ struct sockaddr_in my_addr, peer_addr;
 uint16_t port_server = 3307;
 uint16_t port_rw = 3308;
 uint16_t port_em = 3303;
-int n_conned;     //current connections count
+int n_conned=0;     //current connections count
 
 int cmd, dsz, addr, data;
 char echoBuf[ECHOSIZE];

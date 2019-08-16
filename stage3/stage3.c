@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
@@ -29,6 +30,7 @@
 #define DATASIZE 4      //data size in bytes
 #define ECHOSIZE 1000   //echo max size in bytes
 #define TYPEMANSIZE 4   //man_type
+#define SOCKBUFSIZE 5000000   //socket buffer size
 
 #define QPSK  0b00
 #define QAM16 0b01
@@ -84,13 +86,75 @@ struct sockaddr_in my_addr, peer_addr;
 uint16_t port_server = 3307;
 uint16_t port_rw = 3308;
 uint16_t port_em = 3303;
-int n_conned;     //current connections count
+int n_conned = 0;     //current connections count
 
 int cmd, dsz, addr, data;
 char echoBuf[ECHOSIZE];
 char *readArray = NULL, *writeArray = NULL;
 
 pthread_t thread_bulb;
+pthread_t thread_socket;
+
+void *sockBuffer;
+int bufferPointerForSocket;
+int bufferFreeSize;
+
+int freeSizeToEnd;
+ssize_t realRead;
+ssize_t addDataToBuffer(int size)
+{
+    freeSizeToEnd = SOCKBUFSIZE - bufferPointerForSocket;
+    if (size <= freeSizeToEnd) {
+        realRead = read(rw_socket, sockBuffer+bufferPointerForSocket, size);
+    } else {
+        realRead = read(rw_socket, sockBuffer+bufferPointerForSocket, freeSizeToEnd);
+    }
+    bufferPointerForSocket+=realRead;
+    if (bufferPointerForSocket == SOCKBUFSIZE) bufferPointerForSocket=0;
+    return realRead;
+}
+
+pthread_mutex_t mutex_socket = PTHREAD_MUTEX_INITIALIZER;
+
+void* start_socket_thread(void* arg) {
+    //printf("start_socket_thread start\n");
+    ssize_t r=0;
+    int argp = 0;
+    int curBufferFreeSize;
+    bufferPointerForSocket = 0;
+    bufferFreeSize = SOCKBUFSIZE;
+
+    while (1) {
+        FD_ZERO(&rfds);
+        FD_SET(rw_socket, &rfds);
+        int retval = select(rw_socket+1, &rfds, NULL, NULL, NULL);
+        if (retval) {
+            if (FD_ISSET(rw_socket,&rfds)) {
+                ioctl(rw_socket, FIONREAD, &argp);
+                curBufferFreeSize = bufferFreeSize;
+                if (curBufferFreeSize == 0) continue;
+                if (curBufferFreeSize < argp) r = addDataToBuffer(curBufferFreeSize);
+                else    r = addDataToBuffer(argp);
+                if (r == -1) {
+                    handle_error(ERROR_READ);
+                    return;
+                }
+                if (r ==  0) {
+                    handle_error(ERROR_CONNECTION);
+                    return;
+                }
+                bufferFreeSize-=r;
+            } else {
+                handle_error(ERROR_FD_ISSET_READ);
+                return;
+            }
+        } else if(retval == -1) {
+            handle_error(ERROR_SELECT_READ);
+            return;
+        }
+    }
+}
+
 
 #define closeAll_1  if(munmap(virtual_base, length+delta) == -1) \
                         handle_error(ERROR_MUNMAP); \

@@ -20,6 +20,8 @@
 #include <signal.h>
 //#include <rpc/auth_des.h>
 
+//#define debug
+
 #define MAXNUMCONN 1    //max number connections
 #define CMDSIZE 4       //command size in bytes
 #define DSZSIZE 4       //data count in bytes

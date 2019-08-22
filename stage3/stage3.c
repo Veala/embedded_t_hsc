@@ -20,8 +20,6 @@
 #include <signal.h>
 //#include <rpc/auth_des.h>
 
-//#define debug
-
 #define MAXNUMCONN 1    //max number connections
 #define CMDSIZE 4       //command size in bytes
 #define DSZSIZE 4       //data count in bytes
@@ -87,6 +85,7 @@ uint16_t port_em = 3303;
 int n_conned=0;     //current connections count
 
 int cmd, dsz, addr, data;
+int accel;
 char echoBuf[ECHOSIZE];
 char *readArray = NULL, *writeArray = NULL;
 
@@ -318,9 +317,6 @@ int readAllData(int size, char* refArray, struct timeval* tv) {
                     handle_error(ERROR_CONNECTION);
                     return -1;
                 }
-#ifdef debug
-                printf("recv: %ld bytes\n", r);
-#endif
             } else {
                 handle_error(ERROR_FD_ISSET_READ);
                 return -1;
@@ -334,16 +330,13 @@ int readAllData(int size, char* refArray, struct timeval* tv) {
         }
         n+=r;
         if (n>=size) {
-            printf("//----- readAllData end\n");
             return 0;
         }
     }
 }
 
 int writeAllData(int size, char* refArray) {
-    printf("//----- writeAllData start\n");
     ssize_t r=0;
-    printf("size: %d\n", size);
     int n=0;
     while (1) {
         r = write(rw_socket, refArray+n, size - n);
@@ -355,20 +348,17 @@ int writeAllData(int size, char* refArray) {
             handle_error(ERROR_CONNECTION);
             return -1;
         }
-#ifdef debug
-        printf("send: %ld bytes\n", r);
-#endif
         n+=r;
-        printf("r: %d\n", r);
-        printf("n: %d\n", n);
         if (n>=size) {
-            printf("//----- writeAllData end\n");
             return 0;
         }
     }
 }
 
 int checkCmd() {
+    //accel=cmd & 0x10000;
+    //cmd &= 0xFFFF;
+    //printf("cmd: %d, accel: %d\n", cmd, accel);
     if (!((cmd>=1) && (cmd<=7))) {
         handle_error(ERROR_CMD);
         return -1;
@@ -420,18 +410,12 @@ void de1_stop_signal(int s, siginfo_t *i, void *c) {
 
 int working() {
     tv.tv_sec = 5;tv.tv_usec = 0;
-    char msg[1000];
 
-    //----- read cmd ------
-    printf("//----- read cmd ------\n");
     if (readAllData(CMDSIZE, (char*)&cmd, NULL) == -1) return -1;
-    sprintf(msg, "Cmd: %d\n",cmd);  writeLog(msg);
     if (checkCmd() == -1) return -1;
 
     //----- read dsz ------
-    printf("//----- read dsz ------\n");
     if (readAllData(DSZSIZE, (char*)&dsz, &tv) == -1) return -1;
-    sprintf(msg, "Dsz: %ld\n",dsz); writeLog(msg);
     if (cmd >= 1 && cmd <=4 )
         if (checkMult(dsz, 0) == -1) return -1;
 
@@ -439,7 +423,6 @@ int working() {
     if (readArray == NULL)
         return handle_error(ERROR_MALLOC);
 
-    printf("//----- read array ------\n");
     if (readAllData(dsz, readArray, &tv) == -1) return -1;
 
     //----- pars cmd ------
@@ -449,7 +432,8 @@ int working() {
             addr = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i);    data = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i+n);
             memcpy(virtual_base + addr + delta, (void*)&data, n);
         }
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;  //для ускорения закомментировано!!!
+        //if (!accel) //для ускорения!!!
+            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 2) {
         addr = *(int*)(readArray);
         int N = (dsz-ADDRSIZE)/DATASIZE;
@@ -457,7 +441,8 @@ int working() {
             data = *(int*)(readArray+DATASIZE*(i+1));
             memcpy(virtual_base + addr + i*ADDRSIZE + delta, (void*)&data, n);
         }
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;  //для ускорения закомментировано!!!
+        //if (!accel) //для ускорения!!!
+            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 3) {
         int N = dsz/4;
         writeArray = (char*)malloc((size_t)dsz);
@@ -468,9 +453,6 @@ int working() {
         for (int i=0; i<N; i++) {
             addr = *(int*)(readArray+ADDRSIZE*i);
             memcpy((void*)(writeArray+DATASIZE*i), virtual_base + addr + delta, n);
-#ifdef debug
-            printf("Read: %d\n", *(int*)(writeArray+DATASIZE*i));
-#endif
         }
         pthread_mutex_unlock(&mutex);
         if (writeAllData(dsz, writeArray)) return -1;
@@ -480,9 +462,6 @@ int working() {
     } else if (cmd == 4) {
         addr = *(int*)(readArray);   int count = *(int*)(readArray+DATASIZE);
         if (checkMult(count, 1) == -1) return -1;
-        printf("cmd == 4, addr==%d\n", addr);
-        printf("cmd == 4, count==%d\n", count);
-
         writeArray = (char*)malloc((size_t)count);
         if (writeArray == NULL)
             return handle_error(ERROR_MALLOC);
@@ -496,50 +475,28 @@ int working() {
         free(writeArray);
         writeArray = NULL;
     } else if (cmd == 5) {
-        printf("%s\n", readArray);
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;  //для ускорения закомментировано!!!
-    } else if (cmd == 6) {  //writing path to the 2-port mem
-//        addr = *(int*)(readArray);
-//        *(unsigned int*)&cmdWord = *((int*)(readArray)+1);
-//        int SL = symbolLength();
-//        int Nsp = cmdWord.num_of_symbols;
-//        int lastSL = SL - (Nsp*SL - (dsz - n)); //without nulls
-//        void* curArrayPointer = readArray+n;
-//        for (int i=1; i<Nsp; i++, addr+=ADDR_MEM2P_DELTA, curArrayPointer+=SL)
-//            memcpy(virtual_base + addr + delta, curArrayPointer, SL);
-//        memcpy(virtual_base + addr + delta, curArrayPointer, lastSL);
-//        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        //if (!accel) //для ускорения!!!
+            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+    } else if (cmd == 6) {
+
     } else if (cmd == 7) {
         addr = *(int*)(readArray);
-        printf("addr: %d\n", addr);
         size_t count = (size_t)*(int*)(readArray+DATASIZE);
-        printf("count: %ld\n", count);
         int destAddr = *(int*)(readArray+2*DATASIZE);
-        printf("destAddr: %d\n", destAddr);
         if (checkMult(count, 1) == -1) return -1;
-
-//        writeArray = (char*)malloc((size_t)count);
-//        for (int i=0; i<count; i+=DATASIZE, addr+=DATASIZE)
-//            memcpy((void*)(writeArray+i), virtual_base + addr + delta, n);
-//        for (int i=0; i<count; i+=DATASIZE, destAddr+=DATASIZE)
-//            memcpy(virtual_base + destAddr + delta, (void*)(writeArray + i), n);
 
         pthread_mutex_lock(&mutex);
         for (int i=0; i<count; i+=DATASIZE, addr+=DATASIZE)
             memcpy(virtual_base + destAddr + i + delta, virtual_base + addr + delta, n);
         pthread_mutex_unlock(&mutex);
 
-//            memcpy(virtual_base + destAddr + delta, virtual_base + addr + delta, count); //not working
-
-        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;    //для ускорения закомментировано!!!
+        //if (!accel) //для ускорения!!!
+            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else {
-        printf("ELSE");
         return 1;
     }
     free(readArray);
     readArray = NULL;
-    sprintf(msg, "Cmd %d is completed\n", cmd);
-    writeLog(msg);
 }
 
 int main(int argc, char* argv[])

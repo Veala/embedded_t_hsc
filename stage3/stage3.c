@@ -356,9 +356,6 @@ int writeAllData(int size, char* refArray) {
 }
 
 int checkCmd() {
-    //accel=cmd & 0x10000;
-    //cmd &= 0xFFFF;
-    //printf("cmd: %d, accel: %d\n", cmd, accel);
     if (!((cmd>=1) && (cmd<=7))) {
         handle_error(ERROR_CMD);
         return -1;
@@ -432,8 +429,7 @@ int working() {
             addr = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i);    data = *(int*)(readArray+(DATASIZE+ADDRSIZE)*i+n);
             memcpy(virtual_base + addr + delta, (void*)&data, n);
         }
-        //if (!accel) //для ускорения!!!
-            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 2) {
         addr = *(int*)(readArray);
         int N = (dsz-ADDRSIZE)/DATASIZE;
@@ -441,8 +437,7 @@ int working() {
             data = *(int*)(readArray+DATASIZE*(i+1));
             memcpy(virtual_base + addr + i*ADDRSIZE + delta, (void*)&data, n);
         }
-        //if (!accel) //для ускорения!!!
-            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 3) {
         int N = dsz/4;
         writeArray = (char*)malloc((size_t)dsz);
@@ -475,8 +470,7 @@ int working() {
         free(writeArray);
         writeArray = NULL;
     } else if (cmd == 5) {
-        //if (!accel) //для ускорения!!!
-            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 6) {
 
     } else if (cmd == 7) {
@@ -490,8 +484,7 @@ int working() {
             memcpy(virtual_base + destAddr + i + delta, virtual_base + addr + delta, n);
         pthread_mutex_unlock(&mutex);
 
-        //if (!accel) //для ускорения!!!
-            if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
+        if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else {
         return 1;
     }

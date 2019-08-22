@@ -16,6 +16,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <linux/futex.h>
+#include <sys/syscall.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
@@ -97,7 +99,13 @@ pthread_t thread_socket;
 
 void *sockBuffer;
 int bufferPointerForSocket;
+int bufferPointerForReader;
 int bufferFreeSize;
+int reservedSize;
+
+int futex(int *uaddr, int op, int val, const struct timespec *timeout, int *uaddr2, int val3) {
+    return syscall(SYS_futex, uaddr, op, val, timeout, uaddr2, val3);
+}
 
 int freeSizeToEnd;
 ssize_t realRead;
@@ -121,7 +129,10 @@ void* start_socket_thread(void* arg) {
     ssize_t r=0;
     int argp = 0;
     int curBufferFreeSize;
+    tcp_info info;
+    socklen_t l3 = (socklen_t)sizeof(tcp_info);
     bufferPointerForSocket = 0;
+    bufferPointerForReader = 0;
     bufferFreeSize = SOCKBUFSIZE;
 
     while (1) {
@@ -130,6 +141,14 @@ void* start_socket_thread(void* arg) {
         int retval = select(rw_socket+1, &rfds, NULL, NULL, NULL);
         if (retval) {
             if (FD_ISSET(rw_socket,&rfds)) {
+                int rcb = getsockopt(rw_socket, SOL_TCP, TCP_INFO, (void*)&info, &l3);
+                if (rcb == 0) {
+                    printf("tcpi_state: %d\n", info.tcpi_state);
+                    //Важно для ускорения, но в функции на запись, т.к. там при полном заполнении буфера может быть возвращен 0
+                } else if (rcb == -1) {
+                    printf("error info, errno: %d\n", errno);
+                }
+
                 ioctl(rw_socket, FIONREAD, &argp);
                 curBufferFreeSize = bufferFreeSize;
                 if (curBufferFreeSize == 0) continue;
@@ -363,45 +382,55 @@ int connection() {
     }
 }
 
-int readAllData(int size, char* refArray, struct timeval* tv) {
-    //printf("readAllData start\n");
-    ssize_t r=0;
-    int n=0;
-    while (1) {
-        FD_ZERO(&rfds);
-        FD_SET(rw_socket, &rfds);
-        int retval = select(rw_socket+1, &rfds, NULL, NULL, tv);
-        if (retval) {
-            if (FD_ISSET(rw_socket,&rfds)) {
-                r = read(rw_socket, refArray+n, size - n);
-                if (r == -1) {
-                    handle_error(ERROR_READ);
-                    return -1;
-                }
-                if (r ==  0) {
-                    handle_error(ERROR_CONNECTION);
-                    return -1;
-                }
-#ifdef debug
-                printf("recv: %ld bytes\n", r);
-#endif
-            } else {
-                handle_error(ERROR_FD_ISSET_READ);
-                return -1;
-            }
-        } else if(retval == -1) {
-            handle_error(ERROR_SELECT_READ);
-            return -1;
-        } else {
-            handle_error(ERROR_TIME);
-            return -1;
-        }
-        n+=r;
-        if (n>=size) {
-            printf("//----- readAllData end\n");
-            return 0;
-        }
+//int readAllData(int size, char* refArray, struct timeval* tv) {
+//    //printf("readAllData start\n");
+//    ssize_t r=0;
+//    int n=0;
+//    while (1) {
+//        FD_ZERO(&rfds);
+//        FD_SET(rw_socket, &rfds);
+//        int retval = select(rw_socket+1, &rfds, NULL, NULL, tv);
+//        if (retval) {
+//            if (FD_ISSET(rw_socket,&rfds)) {
+//                r = read(rw_socket, refArray+n, size - n);
+//                if (r == -1) {
+//                    handle_error(ERROR_READ);
+//                    return -1;
+//                }
+//                if (r ==  0) {
+//                    handle_error(ERROR_CONNECTION);
+//                    return -1;
+//                }
+//#ifdef debug
+//                printf("recv: %ld bytes\n", r);
+//#endif
+//            } else {
+//                handle_error(ERROR_FD_ISSET_READ);
+//                return -1;
+//            }
+//        } else if(retval == -1) {
+//            handle_error(ERROR_SELECT_READ);
+//            return -1;
+//        } else {
+//            handle_error(ERROR_TIME);
+//            return -1;
+//        }
+//        n+=r;
+//        if (n>=size) {
+//            printf("//----- readAllData end\n");
+//            return 0;
+//        }
+//    }
+//}
+
+
+int waitForAllData(int size, const struct timespec *timeout) {
+    if (bufferFreeSize == 0) {
+
+    } else {
+        //futex();
     }
+
 }
 
 int writeAllData(int size, char* refArray) {

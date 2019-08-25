@@ -12,12 +12,15 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <linux/if_link.h>
+
 //#include <rpc/auth_des.h>
 
 //#define debug
@@ -61,6 +64,7 @@
 #define ERROR_SIGNAL 22
 #define ERROR_THREAD_CLOSE 23
 #define ERROR_SETSOCKOPT 24
+#define ERROR_INTERFACE 25
 
 //--- protocol errors ---
 #define ERROR_CMD 100
@@ -138,7 +142,7 @@ int handle_error(int err)
         close(fd);
         exit(EXIT_FAILURE);
     } else if (err == ERROR_ARG) {
-        sprintf(msg, "ERROR: <dotted-address-server> program argument is empty\n");
+        sprintf(msg, "ERROR: two program arguments must be, ./stage3 <network_interfce> <t|l>\n");
         writeLog(msg); closeAll_1
         exit(EXIT_FAILURE);
     } else if (err == ERROR_OPENSOCK) {
@@ -147,6 +151,10 @@ int handle_error(int err)
         exit(EXIT_FAILURE);
     } else if (err == ERROR_ATON) {
         sprintf(msg, "ERROR: inet_aton() failed...: %s\n", strerror(errsv));
+        writeLog(msg); closeAll_2
+        exit(EXIT_FAILURE);
+    } else if (err == ERROR_INTERFACE) {
+        sprintf(msg, "ERROR: getifaddrs() failed or not found eth0 interface: %s\n", strerror(errsv));
         writeLog(msg); closeAll_2
         exit(EXIT_FAILURE);
     } else if (err == ERROR_BIND) {
@@ -531,7 +539,21 @@ int main(int argc, char* argv[])
     my_addr.sin_family = AF_INET;
     my_addr.sin_port = htons(port_server);
 
-    if (inet_aton(argv[1], &my_addr.sin_addr) == 0) handle_error(ERROR_ATON);
+    //if (inet_aton(argv[1], &my_addr.sin_addr) == 0) handle_error(ERROR_ATON); //старый вариант с параметром ip вместо интерфейса у программы
+    my_addr.sin_addr.s_addr = 0;
+    struct ifaddrs *ifaddr, *ifa;
+    if (getifaddrs(&ifaddr) == -1) handle_error(ERROR_INTERFACE);
+    printf("OK 1\n");
+    for (ifa=ifaddr; ifa!=NULL; ifa = ifa->ifa_next) {
+        if (strcmp(argv[1], ifa->ifa_name) != 0) continue;
+        printf("OK 2\n");
+        my_addr.sin_addr.s_addr = ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr;
+        break;
+    }
+    freeifaddrs(ifaddr);
+    printf("OK 3\n");
+    if (my_addr.sin_addr.s_addr == 0) handle_error(ERROR_INTERFACE);
+    printf("OK 4\n");
 
     if (bind(tcp_socket, (struct sockaddr *) &my_addr, sizeof(struct sockaddr_in)) == -1) handle_error(ERROR_BIND);
 

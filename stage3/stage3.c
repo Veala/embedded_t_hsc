@@ -543,17 +543,14 @@ int main(int argc, char* argv[])
     my_addr.sin_addr.s_addr = 0;
     struct ifaddrs *ifaddr, *ifa;
     if (getifaddrs(&ifaddr) == -1) handle_error(ERROR_INTERFACE);
-    printf("OK 1\n");
     for (ifa=ifaddr; ifa!=NULL; ifa = ifa->ifa_next) {
         if (strcmp(argv[1], ifa->ifa_name) != 0) continue;
-        printf("OK 2\n");
+        if (ifa->ifa_addr->sa_family != AF_INET) continue;
         my_addr.sin_addr.s_addr = ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr;
         break;
     }
     freeifaddrs(ifaddr);
-    printf("OK 3\n");
     if (my_addr.sin_addr.s_addr == 0) handle_error(ERROR_INTERFACE);
-    printf("OK 4\n");
 
     if (bind(tcp_socket, (struct sockaddr *) &my_addr, sizeof(struct sockaddr_in)) == -1) handle_error(ERROR_BIND);
 

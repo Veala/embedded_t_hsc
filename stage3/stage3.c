@@ -480,6 +480,7 @@ int working() {
         free(writeArray);
         writeArray = NULL;
     } else if (cmd == 5) {
+        printf("%s\n", readArray);
         if (writeAllData(CMDSIZE, (char*)&cmd)) return -1;
     } else if (cmd == 6) {
 

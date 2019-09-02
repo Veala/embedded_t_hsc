@@ -76,7 +76,7 @@ off_t offset = 0xC0000000, \
 size_t delta;
 size_t n;
 
-struct {
+typedef struct {
     int rw_socket;
     struct sockaddr_in peer_addr;
     fd_set rfds;
@@ -91,34 +91,10 @@ int getI() {
         if (Connections[i] == NULL)
             return i;
 }
-void delCon(struct Connection *con) {
-    int i = 0;
-    for (int i = 0; (i < MAXNUMCONN) && (Connections[i] != conn); ++i)  continue;
-    if (con->rw_socket !=-1)
-        if (close(con->rw_socket) == -1)
-            handle_error(ERROR_CLOSE_SOCK, NULL);
-    if (con->readArray != NULL) free(con->readArray);
-    if (con->writeArray != NULL) free(con->writeArray);
-    free((void*)con);                   //?????? pthread_t
-    Connections[i] = NULL;
-    n_conned-=1;
-    printf("One connection is deleted, active connection count: %d\n", n_conned);
-}
-void delAllCon() {
-    for (int i = 0; i < MAXNUMCONN; ++i) {
-        if (Connections[i] == NULL) continue;
-        pthread_cancel(Connections[i]->thread);
-        if (con->rw_socket !=-1)
-            if (close(con->rw_socket) == -1)
-                handle_error(ERROR_CLOSE_SOCK, NULL);
-        if (con->readArray != NULL) free(con->readArray);
-        if (con->writeArray != NULL) free(con->writeArray);
-        free((void*)con);
-        Connections[i] = NULL;
-        n_conned-=1;
-    }
-    printf("All connections deleted, active connection count: %d\n", n_conned);
-}
+
+void delCon(Connection *con);
+void *working(void* arg);
+//void delAllCon();
 
 int tcp_socket;
 fd_set tcp_rfds;
@@ -156,7 +132,7 @@ void writeLog(char *msg) {
     fclose(lf);
 }
 
-int handle_error(int err, struct Connection* con)
+int handle_error(int err, Connection* con)
 {
     char msg[1000];
     int errsv = errno;
@@ -288,6 +264,37 @@ int handle_error(int err, struct Connection* con)
     }
 }
 
+void delCon(Connection *con) {
+    int i = 0;
+    for (int i = 0; (i < MAXNUMCONN) && (Connections[i] != con); ++i)  continue;
+    if (con->rw_socket != -1) {
+        if (close(con->rw_socket) == -1)
+            handle_error(ERROR_CLOSE_SOCK, NULL);
+    }
+    if (con->readArray != NULL) free(con->readArray);
+    if (con->writeArray != NULL) free(con->writeArray);
+    free((void*)con);                   //?????? pthread_t
+    Connections[i] = NULL;
+    n_conned-=1;
+    printf("One connection is deleted, active connection count: %d\n", n_conned);
+}
+
+void delAllCon() {
+    for (int i = 0; i < MAXNUMCONN; ++i) {
+        if (Connections[i] == NULL) continue;
+        pthread_cancel(Connections[i]->thread);
+        if (Connections[i]->rw_socket !=-1)
+            if (close(Connections[i]->rw_socket) == -1)
+                handle_error(ERROR_CLOSE_SOCK, NULL);
+        if (Connections[i]->readArray != NULL) free(Connections[i]->readArray);
+        if (Connections[i]->writeArray != NULL) free(Connections[i]->writeArray);
+        free((void*)Connections[i]);
+        Connections[i] = NULL;
+        n_conned-=1;
+    }
+    printf("All connections deleted, active connection count: %d\n", n_conned);
+}
+
 int connection() {
     socklen_t peer_addr_size = sizeof(struct sockaddr_in);
     char txt[100];
@@ -306,7 +313,7 @@ int connection() {
                     continue;
                 }
                 int i = getI();
-                Connections[i] = (struct Connection*)malloc(sizeof(struct Connection));
+                Connections[i] = (Connection*)malloc(sizeof(Connection));
                 Connections[i]->readArray = NULL; Connections[i]->writeArray = NULL;
                 Connections[i]->rw_socket = accept(tcp_socket, (struct sockaddr*) &(Connections[i]->peer_addr), &peer_addr_size);
                 if (Connections[i]->rw_socket == -1) {
@@ -334,7 +341,7 @@ int connection() {
     }
 }
 
-int readAllData(int size, char* refArray, struct timeval* tv, struct Connection* con) {
+int readAllData(int size, char* refArray, struct timeval* tv, Connection* con) {
     //printf("readAllData start\n");
     ssize_t r=0;
     int n=0;
@@ -371,7 +378,7 @@ int readAllData(int size, char* refArray, struct timeval* tv, struct Connection*
     }
 }
 
-int writeAllData(int size, char* refArray, struct Connection* con) {
+int writeAllData(int size, char* refArray, Connection* con) {
     ssize_t r=0;
     int n=0;
     while (1) {
@@ -391,7 +398,7 @@ int writeAllData(int size, char* refArray, struct Connection* con) {
     }
 }
 
-int checkCmd(int cmd, struct Connection* con) {
+int checkCmd(int cmd, Connection* con) {
     if (!((cmd>=1) && (cmd<=7))) {
         handle_error(ERROR_CMD, con);
         return -1;
@@ -399,7 +406,7 @@ int checkCmd(int cmd, struct Connection* con) {
     return 0;
 }
 
-int checkMult(int num, int who, struct Connection* con) {
+int checkMult(int num, int who, Connection* con) {
     int remainder = num % 4;
     if (remainder != 0) {
         if (who == 0)
@@ -442,7 +449,7 @@ void de1_stop_signal(int s, siginfo_t *i, void *c) {
 
 void *working(void* arg) {
     char echoBuf[ECHOSIZE];
-    struct Connection *con = arg;
+    Connection *con = arg;
     int cmd, dsz, addr, data;
     struct timeval tv;
     char *readArray, *writeArray;
@@ -538,7 +545,7 @@ void *working(void* arg) {
 
             if (writeAllData(CMDSIZE, (char*)&cmd, con) == -1) return NULL;
         } else {
-            return 1;
+            return NULL;
         }
         free(con->readArray);
         readArray = NULL;   con->readArray = NULL;

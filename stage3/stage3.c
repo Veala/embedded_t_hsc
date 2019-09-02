@@ -529,6 +529,7 @@ void *working(void* arg) {
             free(con->writeArray);
             writeArray = NULL;  con->writeArray = NULL;
         } else if (cmd == 5) {
+            printf("%s\n", readArray);
             if (writeAllData(CMDSIZE, (char*)&cmd, con) == -1) return NULL;
         } else if (cmd == 6) {
 

@@ -60,6 +60,7 @@
 #define ERROR_THREAD_CLOSE 23
 #define ERROR_SETSOCKOPT 24
 #define ERROR_INTERFACE 25
+#define ERROR_CON_THREAD_CREATE 26
 
 //--- protocol errors ---
 #define ERROR_CMD 100
@@ -95,6 +96,7 @@ int getI() {
 void delCon(Connection *con);
 void *working(void* arg);
 //void delAllCon();
+void freeConnection(Connection *con);
 
 int tcp_socket;
 fd_set tcp_rfds;
@@ -175,10 +177,11 @@ int handle_error(int err, Connection* con)
     } else if (err == ERROR_ACCEPT) {
         sprintf(msg, "ERROR: accept() failed...: %s\n", strerror(errsv));
         writeLog(msg);
-        delCon(con);
-
-//        closeAll_2
-//        exit(EXIT_FAILURE);
+        freeConnection(con);
+    } else if (err == ERROR_CON_THREAD_CREATE) {
+        sprintf(msg, "ERROR: Connection thread didn't start: %s\n", strerror(errsv));
+        writeLog(msg);
+        freeConnection(con);
     } else if (err == ERROR_MUNMAP) {
         sprintf(msg, "ERROR: munmap() failed...: %s\n", strerror(errsv));
         writeLog(msg);
@@ -254,7 +257,10 @@ int handle_error(int err, Connection* con)
         writeLog(msg);
         return 0;
     } else if (err == ERROR_THREAD_CLOSE) {
-        sprintf(msg, "ERROR: Thread close function is not working\n");
+        if (con==NULL)
+            sprintf(msg, "ERROR: Thread close function is not working on %s\n", "Bulb");
+        if (con!=NULL)
+            sprintf(msg, "ERROR: Thread close function is not working on %s\n", " Connection");
         writeLog(msg);
         return 0;
     } else if (err == ERROR_SETSOCKOPT) {
@@ -264,35 +270,60 @@ int handle_error(int err, Connection* con)
     }
 }
 
-void delCon(Connection *con) {
+void freeConnection(Connection *con) {
     int i = 0;
-    for (int i = 0; (i < MAXNUMCONN) && (Connections[i] != con); ++i)  continue;
+    for (; (i < MAXNUMCONN) && (Connections[i] != con); ++i)  continue;
+    free((void*)con);                   //?????? pthread_t
+    Connections[i] = NULL;
+}
+
+void delCon(Connection *con) {
     if (con->rw_socket != -1) {
+//        printf("Go to if(con->rw_socket !=-1)\n");
         if (close(con->rw_socket) == -1)
             handle_error(ERROR_CLOSE_SOCK, NULL);
     }
-    if (con->readArray != NULL) free(con->readArray);
-    if (con->writeArray != NULL) free(con->writeArray);
-    free((void*)con);                   //?????? pthread_t
-    Connections[i] = NULL;
+    if (con->readArray != NULL) {
+//        printf("free(con->readArray)\n");
+        free(con->readArray);
+    }
+    if (con->writeArray != NULL) {
+//        printf("free(con->writeArray)\n");
+        free(con->writeArray);
+    }
+    freeConnection(con);
     n_conned-=1;
     printf("One connection is deleted, active connection count: %d\n", n_conned);
 }
 
 void delAllCon() {
     for (int i = 0; i < MAXNUMCONN; ++i) {
+//        printf("%d\n", i);
         if (Connections[i] == NULL) continue;
-        pthread_cancel(Connections[i]->thread);
-        if (Connections[i]->rw_socket !=-1)
+//        printf("%d\n", i);
+        //if (pthread_cancel(Connections[i]->thread) != 0) handle_error(ERROR_THREAD_CLOSE, Connections[i]);
+        if (Connections[i]->rw_socket !=-1) {
+//            printf("Go to if(Connections[i]->rw_socket !=-1)\n");
             if (close(Connections[i]->rw_socket) == -1)
                 handle_error(ERROR_CLOSE_SOCK, NULL);
-        if (Connections[i]->readArray != NULL) free(Connections[i]->readArray);
-        if (Connections[i]->writeArray != NULL) free(Connections[i]->writeArray);
+        }
+//        printf("%d\n", i);
+        if (Connections[i]->readArray != NULL) {
+//            printf("free(Connections[i]->readArray)\n");
+            free(Connections[i]->readArray);
+        }
+        if (Connections[i]->writeArray != NULL) {
+//            printf("free(Connections[i]->writeArray)\n");
+            free(Connections[i]->writeArray);
+        }
+//        printf("%d\n", i);
+        if (pthread_cancel(Connections[i]->thread) != 0) handle_error(ERROR_THREAD_CLOSE, Connections[i]);
         free((void*)Connections[i]);
+//        printf("%d\n", i);
         Connections[i] = NULL;
         n_conned-=1;
     }
-    printf("All connections deleted, active connection count: %d\n", n_conned);
+    printf("All threads deleted, active connection count: %d\n", n_conned);
 }
 
 int connection() {
@@ -323,15 +354,13 @@ int connection() {
 #ifdef debug
                 printf("Peer port: %d\n", ntohs(Connections[i]->peer_addr.sin_port));
 #endif
-                if (pthread_create(&(Connections[i]->thread), NULL, &working, Connections[i]) != 0)
-                    printf("Connection thread didn't start!\n");
-                else
-                    printf("Connection thread started!\n");
-
-                sprintf(txt,"Connection on port %d is available now\n", ntohs(Connections[i]->peer_addr.sin_port));
-                writeLog(txt);
-                n_conned=n_conned+1;
-                return 0;
+                if (pthread_create(&(Connections[i]->thread), NULL, &working, Connections[i]) != 0) {
+                    handle_error(ERROR_CON_THREAD_CREATE, Connections[i]);
+                } else {
+                    sprintf(txt,"Connection on port %d is available now\n", ntohs(Connections[i]->peer_addr.sin_port));
+                    writeLog(txt);
+                    n_conned=n_conned+1;
+                }
             } else {
                 handle_error(ERROR_FD_ISSET_CONN, NULL);
             }
@@ -436,7 +465,7 @@ void de1_stop_signal(int s, siginfo_t *i, void *c) {
     char msg[1000];
     sprintf(msg, "Signal %d is obtained\n", s);
     writeLog(msg);
-    if (pthread_cancel(thread_bulb) == -1) handle_error(ERROR_THREAD_CLOSE, NULL);
+    if (pthread_cancel(thread_bulb) != 0) handle_error(ERROR_THREAD_CLOSE, NULL);
 //    int optval = 1; socklen_t len = sizeof(optval);
 //    setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, (void*)&optval, len);
 
@@ -449,7 +478,7 @@ void de1_stop_signal(int s, siginfo_t *i, void *c) {
 
 void *working(void* arg) {
     char echoBuf[ECHOSIZE];
-    Connection *con = arg;
+    Connection *con = (Connection *)arg;
     int cmd, dsz, addr, data;
     struct timeval tv;
     char *readArray, *writeArray;
@@ -624,7 +653,7 @@ int main(int argc, char* argv[])
     //------------------------------------------------------------ Main cycle ---------------------------------------------------------
     connection();
 
-    if (pthread_cancel(thread_bulb) == -1) handle_error(ERROR_THREAD_CLOSE, NULL);
+    if (pthread_cancel(thread_bulb) != 0) handle_error(ERROR_THREAD_CLOSE, NULL);
     delAllCon();
     char msg[100];
     sprintf(msg, "Main cycle is finished\n");
